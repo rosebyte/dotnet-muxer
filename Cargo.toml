@@ -1,0 +1,9 @@
+[package]
+name = "dotnet-muxer"
+version = "0.1.0"
+edition = "2021"
+description = "A smart dispatcher that routes dotnet invocations to the right runtime/SDK based on context"
+
+[[bin]]
+name = "dotnet"
+path = "src/main.rs"
