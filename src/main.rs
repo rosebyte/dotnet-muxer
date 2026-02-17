@@ -1,6 +1,11 @@
 // dotnet-muxer: A smart dispatcher that routes dotnet invocations to the right
 // runtime/SDK based on context (repo-local preview SDK, testhost, or system dotnet).
 //
+// Dispatch priority:
+//   1. Testhost — if args reference a testhost .dll, use the repo's built testhost
+//   2. Local SDK — walk up from cwd (or VSCode workspace) looking for .dotnet/dotnet
+//   3. System — next dotnet found in PATH
+//
 // Build:   cargo build --release
 // Install: place target/release/dotnet in ~/bin/ (early in $PATH)
 
@@ -8,21 +13,19 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-static mut VERBOSE: bool = false;
+static VERBOSE: AtomicBool = AtomicBool::new(false);
 
 fn verbose(msg: &str) {
-    // SAFETY: VERBOSE is only written once at startup before any threads.
-    if unsafe { VERBOSE } {
+    if VERBOSE.load(Ordering::Relaxed) {
         eprintln!("[dotnet-muxer] {msg}");
     }
 }
 
-// --- JSON helpers (minimal, no dependency) ---
-
-fn read_file_to_string(path: &Path) -> Option<String> {
-    fs::read_to_string(path).ok()
-}
+// ---------------------------------------------------------------------------
+// JSON helpers (minimal, no dependency)
+// ---------------------------------------------------------------------------
 
 /// Extract a string value for a given key from a flat-ish JSON object.
 /// Handles simple cases like: "key": "value"
@@ -30,21 +33,16 @@ fn json_get_string(json: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\"");
     let pos = json.find(&needle)?;
     let rest = &json[pos + needle.len()..];
-
-    // Skip whitespace and colon
-    let rest = rest.trim_start();
-    let rest = rest.strip_prefix(':')?;
-    let rest = rest.trim_start();
-
-    // Expect opening quote
-    let rest = rest.strip_prefix('"')?;
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
 }
 
-// --- Platform detection ---
+// ---------------------------------------------------------------------------
+// Platform constants
+// ---------------------------------------------------------------------------
 
-fn get_os_name() -> &'static str {
+fn os_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "osx"
     } else if cfg!(target_os = "linux") {
@@ -56,7 +54,7 @@ fn get_os_name() -> &'static str {
     }
 }
 
-fn get_arch_name() -> &'static str {
+fn arch_name() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         "arm64"
     } else if cfg!(target_arch = "x86_64") {
@@ -70,188 +68,128 @@ fn get_arch_name() -> &'static str {
     }
 }
 
-// --- Repo detection ---
+fn path_separator() -> char {
+    if cfg!(windows) { ';' } else { ':' }
+}
+
+// ---------------------------------------------------------------------------
+// Repo detection (global.json with allowPrerelease)
+// ---------------------------------------------------------------------------
 
 struct RepoInfo {
     root: PathBuf,
     sdk_version: String,
     tfm: String,
-    #[allow(dead_code)]
-    is_preview: bool,
 }
 
 /// Derive TFM from SDK version string: "11.0.100-alpha.1..." → "net11.0"
 fn derive_tfm(sdk_version: &str) -> Option<String> {
-    let dot = sdk_version.find('.')?;
-    let major = &sdk_version[..dot];
+    let major = &sdk_version[..sdk_version.find('.')?];
     Some(format!("net{major}.0"))
 }
 
-fn parse_global_json(root: PathBuf, content: &str) -> Option<RepoInfo> {
-    let version = json_get_string(content, "version")?;
+fn try_parse_repo(root: PathBuf) -> Option<RepoInfo> {
+    let content = fs::read_to_string(root.join("global.json")).ok()?;
+    if !content.contains("\"allowPrerelease\"") {
+        return None;
+    }
+    let version = json_get_string(&content, "version")?;
     let tfm = derive_tfm(&version)?;
-    let is_preview = content.contains("allowPrerelease");
-    Some(RepoInfo {
-        root,
-        sdk_version: version,
-        tfm,
-        is_preview,
-    })
+    Some(RepoInfo { root, sdk_version: version, tfm })
 }
 
 fn find_repo_root() -> Option<RepoInfo> {
-    // Allow override
-    if let Ok(override_root) = env::var("DOTNET_MUXER_REPO_ROOT") {
-        if !override_root.is_empty() {
-            let root = PathBuf::from(&override_root);
-            let gj = root.join("global.json");
-            if let Some(content) = read_file_to_string(&gj) {
-                if let Some(info) = parse_global_json(root, &content) {
-                    return Some(info);
-                }
+    // Allow override via environment
+    if let Ok(root) = env::var("DOTNET_MUXER_REPO_ROOT") {
+        if !root.is_empty() {
+            if let Some(info) = try_parse_repo(PathBuf::from(&root)) {
+                return Some(info);
             }
         }
     }
 
     // Walk up from cwd
     let mut dir = env::current_dir().ok()?;
-
     loop {
-        let gj = dir.join("global.json");
-        if gj.exists() {
-            if let Some(content) = read_file_to_string(&gj) {
-                // Only match repos with allowPrerelease (i.e., dotnet/runtime-style repos)
-                if content.contains("\"allowPrerelease\"") {
-                    if let Some(info) = parse_global_json(dir.clone(), &content) {
-                        return Some(info);
-                    }
-                }
+        if dir.join("global.json").exists() {
+            if let Some(info) = try_parse_repo(dir.clone()) {
+                return Some(info);
             }
         }
-
-        match dir.parent() {
-            Some(parent) if parent != dir => {
-                dir = parent.to_path_buf();
-            }
-            _ => break,
+        if !dir.pop() {
+            break;
         }
     }
-
     None
 }
 
-// --- Testhost detection ---
+// ---------------------------------------------------------------------------
+// Testhost detection
+// ---------------------------------------------------------------------------
 
-fn find_testhost_dotnet(repo: &RepoInfo) -> Option<PathBuf> {
-    let os = get_os_name();
-    let arch = get_arch_name();
-
-    let configs_to_try: Vec<String> = if let Ok(config) = env::var("DOTNET_MUXER_CONFIG") {
-        if !config.is_empty() {
-            vec![config]
-        } else {
-            vec!["Debug".into(), "Release".into(), "Checked".into()]
-        }
-    } else {
-        vec!["Debug".into(), "Release".into(), "Checked".into()]
-    };
-
-    for config in &configs_to_try {
-        // e.g. artifacts/bin/testhost/net11.0-osx-Debug-arm64/dotnet
-        let dirname = format!("{}-{os}-{config}-{arch}", repo.tfm);
-        let candidate = repo
-            .root
-            .join("artifacts")
-            .join("bin")
-            .join("testhost")
-            .join(&dirname)
-            .join("dotnet");
-
-        if candidate.exists() {
-            verbose(&format!("Found testhost: {}", candidate.display()));
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-/// Check if the invocation is a testhost exec
 fn is_testhost_invocation(args: &[String]) -> bool {
     args.iter()
         .skip(1)
         .any(|arg| arg.contains("testhost") && arg.contains(".dll"))
 }
 
-// --- PATH scanning ---
+fn find_testhost_dotnet(repo: &RepoInfo) -> Option<PathBuf> {
+    let os = os_name();
+    let arch = arch_name();
 
-fn find_self_path() -> Option<PathBuf> {
-    env::current_exe().ok().and_then(|p| fs::canonicalize(p).ok())
-}
+    let configs: Vec<String> = match env::var("DOTNET_MUXER_CONFIG") {
+        Ok(c) if !c.is_empty() => vec![c],
+        _ => vec!["Debug".into(), "Release".into(), "Checked".into()],
+    };
 
-fn find_next_dotnet_in_path() -> Option<PathBuf> {
-    let self_resolved = find_self_path()
-        .and_then(|p| fs::canonicalize(&p).ok())
-        .map(|p| p.to_string_lossy().to_string());
-
-    let path_env = env::var("PATH").ok()?;
-
-    for dir in path_env.split(':') {
-        if dir.is_empty() {
-            continue;
-        }
-
-        let candidate = Path::new(dir).join("dotnet");
-        if candidate.exists() && candidate.is_file() {
-            if let Ok(resolved) = fs::canonicalize(&candidate) {
-                let resolved_str = resolved.to_string_lossy().to_string();
-                if self_resolved.as_deref() != Some(&resolved_str) {
-                    verbose(&format!("Found next dotnet in PATH: {resolved_str}"));
-                    return Some(resolved);
-                }
-            }
+    for config in &configs {
+        // e.g. artifacts/bin/testhost/net11.0-osx-Debug-arm64/dotnet
+        let candidate = repo.root
+            .join("artifacts/bin/testhost")
+            .join(format!("{}-{os}-{config}-{arch}", repo.tfm))
+            .join("dotnet");
+        if candidate.exists() {
+            verbose(&format!("Found testhost: {}", candidate.display()));
+            return Some(candidate);
         }
     }
-
     None
 }
 
-// --- .dotnet discovery (walk up the tree) ---
+// ---------------------------------------------------------------------------
+// Local .dotnet/dotnet discovery
+// ---------------------------------------------------------------------------
 
+/// Walk up from `start` looking for a `.dotnet/dotnet` executable.
 fn find_dotnet_from(start: &Path) -> Option<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
-        let candidate = dir.join(".dotnet").join("dotnet");
-        if candidate.exists() && candidate.is_file() {
+        let candidate = dir.join(".dotnet/dotnet");
+        if candidate.is_file() {
             verbose(&format!("Found local .dotnet/dotnet: {}", candidate.display()));
             return Some(candidate);
         }
-        match dir.parent() {
-            Some(parent) if parent != dir => {
-                dir = parent.to_path_buf();
-            }
-            _ => break,
+        if !dir.pop() {
+            break;
         }
     }
     None
 }
 
+/// Try cwd first, then fall back to VSCode sibling-process discovery.
 fn find_local_dotnet() -> Option<PathBuf> {
-    // First, try walking up from cwd (works for terminals and well-behaved spawners)
-    if let Some(cwd) = env::current_dir().ok() {
+    if let Ok(cwd) = env::current_dir() {
         if let Some(dotnet) = find_dotnet_from(&cwd) {
             return Some(dotnet);
         }
     }
 
-    // Fallback: if we're inside VSCode, discover workspace from sibling processes
-    if env::var("VSCODE_CWD").is_ok() {
+    // When spawned by a VSCode extension the cwd is typically "/".
+    // Discover the workspace folder by inspecting sibling processes' cwds.
+    if env::var_os("VSCODE_CWD").is_some() {
         verbose("VSCode detected, probing sibling process cwds");
         if let Some(workspace) = vscode::find_workspace_from_siblings() {
-            verbose(&format!(
-                "Found VSCode workspace via sibling: {}",
-                workspace.display()
-            ));
+            verbose(&format!("Workspace via sibling: {}", workspace.display()));
             if let Some(dotnet) = find_dotnet_from(&workspace) {
                 return Some(dotnet);
             }
@@ -261,31 +199,81 @@ fn find_local_dotnet() -> Option<PathBuf> {
     None
 }
 
-// --- VSCode workspace discovery via sibling process cwds ---
+// ---------------------------------------------------------------------------
+// PATH scanning
+// ---------------------------------------------------------------------------
+
+fn find_next_dotnet_in_path() -> Option<PathBuf> {
+    let self_path = env::current_exe()
+        .ok()
+        .and_then(|p| fs::canonicalize(p).ok());
+
+    for dir in env::var("PATH").ok()?.split(path_separator()) {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(dir).join("dotnet");
+        if candidate.is_file() {
+            if let Ok(resolved) = fs::canonicalize(&candidate) {
+                if self_path.as_ref() != Some(&resolved) {
+                    verbose(&format!("Next dotnet in PATH: {}", resolved.display()));
+                    return Some(resolved);
+                }
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+fn exec_dotnet(dotnet_path: &Path, args: &[String]) -> ! {
+    use std::os::unix::process::CommandExt;
+    verbose(&format!("Dispatching to: {}", dotnet_path.display()));
+    let err = process::Command::new(dotnet_path)
+        .args(&args[1..])
+        .exec();
+    eprintln!("[dotnet-muxer] Failed to exec {}: {err}", dotnet_path.display());
+    process::exit(127);
+}
+
+#[cfg(not(unix))]
+fn exec_dotnet(dotnet_path: &Path, args: &[String]) -> ! {
+    verbose(&format!("Dispatching to: {}", dotnet_path.display()));
+    match process::Command::new(dotnet_path).args(&args[1..]).status() {
+        Ok(s) => process::exit(s.code().unwrap_or(127)),
+        Err(e) => {
+            eprintln!("[dotnet-muxer] Failed to exec {}: {e}", dotnet_path.display());
+            process::exit(127);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VSCode workspace discovery via sibling process cwds
+// ---------------------------------------------------------------------------
 
 mod vscode {
     use super::verbose;
     use std::env;
     use std::path::PathBuf;
 
-    /// Check if a cwd path is useful (not root, not an extension dir, etc.)
+    /// A cwd is useful if it isn't a root dir or a VSCode-internal path.
     fn is_useful_cwd(path: &std::path::Path) -> bool {
         let s = path.to_string_lossy();
-
-        // Skip root directories
-        if s == "/" || s == "\\" || s.len() <= 3 && s.ends_with(":\\") {
+        if s == "/" || s == "\\" || (s.len() <= 3 && s.ends_with(":\\")) {
             return false;
         }
-
-        // Skip VSCode extension/internal paths
         if s.contains(".vscode") || s.contains("Visual Studio Code") || s.contains("VSCode") {
             return false;
         }
-
         true
     }
 
-    /// Walk up parent PIDs, inspect siblings' cwds, return a useful workspace path.
+    /// Walk up the parent-PID chain, inspecting sibling processes' cwds.
     pub fn find_workspace_from_siblings() -> Option<PathBuf> {
         let vscode_pid: u32 = env::var("VSCODE_PID")
             .ok()
@@ -293,26 +281,37 @@ mod vscode {
             .unwrap_or(0);
 
         let mut pid = platform::getpid();
-        // Walk up at most 10 levels, stopping at VSCODE_PID
+
+        // Log the full parent chain for diagnostics
+        verbose("Process ancestor chain:");
+        {
+            let mut p = pid;
+            loop {
+                let name = platform::get_name_of(p).unwrap_or_default();
+                let cwd = platform::get_cwd_of(p)
+                    .map(|c| c.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "?".into());
+                verbose(&format!("  PID {p}: {name} (cwd: {cwd})"));
+                match platform::getppid_of(p) {
+                    Some(parent) if parent > 1 && parent != p => p = parent,
+                    _ => break,
+                }
+            }
+        }
+
         for _ in 0..10 {
             let parent = platform::getppid_of(pid)?;
             if parent <= 1 {
                 break;
             }
 
-            // List children of this parent (our siblings) and check their cwds
-            let children = platform::list_children(parent);
-            for child in &children {
-                if *child == pid {
+            for child in platform::list_children(parent) {
+                if child == pid {
                     continue;
                 }
-                if let Some(cwd) = platform::get_cwd_of(*child) {
+                if let Some(cwd) = platform::get_cwd_of(child) {
                     if is_useful_cwd(&cwd) {
-                        verbose(&format!(
-                            "Sibling PID {} has useful cwd: {}",
-                            child,
-                            cwd.display()
-                        ));
+                        verbose(&format!("Sibling PID {child} cwd: {}", cwd.display()));
                         return Some(cwd);
                     }
                 }
@@ -323,28 +322,21 @@ mod vscode {
             }
             pid = parent;
         }
-
         None
     }
 
-    // --- Platform-specific process introspection ---
+    // --- Platform-specific process introspection -------------------------
 
     #[cfg(target_os = "macos")]
     mod platform {
         use std::path::PathBuf;
 
-        // libproc constants
         const PROC_PIDVNODEPATHINFO: i32 = 9;
         const MAXPATHLEN: usize = 1024;
 
         #[repr(C)]
-        struct VnodeInfo {
-            _pad: [u8; 152], // struct vnode_info
-        }
-
-        #[repr(C)]
         struct VnodeInfoPath {
-            _vi: VnodeInfo,
+            _vi: [u8; 152], // struct vnode_info
             vip_path: [u8; MAXPATHLEN],
         }
 
@@ -355,125 +347,75 @@ mod vscode {
         }
 
         extern "C" {
-            fn proc_pidinfo(
-                pid: i32,
-                flavor: i32,
-                arg: u64,
-                buffer: *mut std::ffi::c_void,
-                buffersize: i32,
-            ) -> i32;
-            fn proc_listchildpids(ppid: i32, buffer: *mut i32, buffersize: i32) -> i32;
+            fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buf: *mut u8, sz: i32) -> i32;
+            fn proc_listchildpids(ppid: i32, buf: *mut i32, sz: i32) -> i32;
+            fn proc_name(pid: i32, buf: *mut u8, sz: u32) -> i32;
+            fn sysctl(name: *const i32, namelen: u32, oldp: *mut u8, oldlenp: *mut usize,
+                      newp: *const u8, newlen: usize) -> i32;
         }
 
         pub fn getpid() -> u32 {
             std::process::id()
         }
 
+        pub fn get_name_of(pid: u32) -> Option<String> {
+            let mut buf = [0u8; 256];
+            let ret = unsafe { proc_name(pid as i32, buf.as_mut_ptr(), buf.len() as u32) };
+            if ret <= 0 { return None; }
+            let len = buf.iter().position(|&b| b == 0).unwrap_or(ret as usize);
+            std::str::from_utf8(&buf[..len]).ok().map(|s| s.to_string())
+        }
+
         pub fn getppid_of(pid: u32) -> Option<u32> {
-            // Use sysctl KERN_PROC to get parent PID
-            use std::mem;
-
-            #[repr(C)]
-            #[allow(non_camel_case_types)]
-            struct kinfo_proc {
-                _data: [u8; 648], // sizeof(struct kinfo_proc) on macOS
-            }
-
-            const CTL_KERN: i32 = 1;
-            const KERN_PROC: i32 = 14;
-            const KERN_PROC_PID: i32 = 1;
-
-            extern "C" {
-                fn sysctl(
-                    name: *const i32,
-                    namelen: u32,
-                    oldp: *mut std::ffi::c_void,
-                    oldlenp: *mut usize,
-                    newp: *const std::ffi::c_void,
-                    newlen: usize,
-                ) -> i32;
-            }
-
-            let mut info: kinfo_proc = unsafe { mem::zeroed() };
-            let mut size = mem::size_of::<kinfo_proc>();
-            let mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid as i32];
-
+            // kp_eproc.e_ppid sits at byte offset 560 in struct kinfo_proc (648 bytes)
+            let mut buf = [0u8; 648];
+            let mut size = buf.len();
+            let mib = [1i32 /*CTL_KERN*/, 14 /*KERN_PROC*/, 1 /*KERN_PROC_PID*/, pid as i32];
             let ret = unsafe {
-                sysctl(
-                    mib.as_ptr(),
-                    4,
-                    &mut info as *mut _ as *mut std::ffi::c_void,
-                    &mut size,
-                    std::ptr::null(),
-                    0,
-                )
+                sysctl(mib.as_ptr(), 4, buf.as_mut_ptr(), &mut size, std::ptr::null(), 0)
             };
-
-            if ret != 0 || size == 0 {
+            if ret != 0 || size < 564 {
                 return None;
             }
-
-            // kp_eproc.e_ppid is at offset 560 on both x86_64 and arm64 macOS
-            let bytes = unsafe {
-                std::slice::from_raw_parts(&info as *const _ as *const u8, size)
-            };
-            if bytes.len() >= 564 {
-                let ppid = i32::from_ne_bytes([bytes[560], bytes[561], bytes[562], bytes[563]]);
-                Some(ppid as u32)
-            } else {
-                None
-            }
+            Some(i32::from_ne_bytes([buf[560], buf[561], buf[562], buf[563]]) as u32)
         }
 
         pub fn list_children(pid: u32) -> Vec<u32> {
-            // proc_listchildpids returns the number of PIDs (not bytes).
-            // First call with null buffer to get count.
-            let count =
-                unsafe { proc_listchildpids(pid as i32, std::ptr::null_mut(), 0) };
+            // proc_listchildpids returns the number of PIDs, not bytes.
+            let count = unsafe { proc_listchildpids(pid as i32, std::ptr::null_mut(), 0) };
             if count <= 0 {
                 return Vec::new();
             }
-
             let mut buf = vec![0i32; count as usize];
             let actual = unsafe {
                 proc_listchildpids(
-                    pid as i32,
-                    buf.as_mut_ptr(),
+                    pid as i32, buf.as_mut_ptr(),
                     (buf.len() * std::mem::size_of::<i32>()) as i32,
                 )
             };
-
             if actual <= 0 {
                 return Vec::new();
             }
-
             buf.truncate(actual as usize);
             buf.into_iter().map(|p| p as u32).collect()
         }
 
         pub fn get_cwd_of(pid: u32) -> Option<PathBuf> {
-            let mut info: ProcVnodePathInfo = unsafe { std::mem::zeroed() };
+            let mut info = unsafe { std::mem::zeroed::<ProcVnodePathInfo>() };
             let ret = unsafe {
                 proc_pidinfo(
-                    pid as i32,
-                    PROC_PIDVNODEPATHINFO,
-                    0,
-                    &mut info as *mut _ as *mut std::ffi::c_void,
+                    pid as i32, PROC_PIDVNODEPATHINFO, 0,
+                    &mut info as *mut _ as *mut u8,
                     std::mem::size_of::<ProcVnodePathInfo>() as i32,
                 )
             };
-
             if ret <= 0 {
                 return None;
             }
-
-            let path_bytes = &info.pvi_cdir.vip_path;
-            let len = path_bytes.iter().position(|&b| b == 0).unwrap_or(MAXPATHLEN);
-            let path_str = std::str::from_utf8(&path_bytes[..len]).ok()?;
-            if path_str.is_empty() {
-                return None;
-            }
-            Some(PathBuf::from(path_str))
+            let bytes = &info.pvi_cdir.vip_path;
+            let len = bytes.iter().position(|&b| b == 0).unwrap_or(MAXPATHLEN);
+            let s = std::str::from_utf8(&bytes[..len]).ok()?;
+            if s.is_empty() { None } else { Some(PathBuf::from(s)) }
         }
     }
 
@@ -486,43 +428,36 @@ mod vscode {
             std::process::id()
         }
 
+        pub fn get_name_of(pid: u32) -> Option<String> {
+            fs::read_to_string(format!("/proc/{pid}/comm"))
+                .ok()
+                .map(|s| s.trim().to_string())
+        }
+
         pub fn getppid_of(pid: u32) -> Option<u32> {
             let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
             // Format: pid (comm) state ppid ...
-            // comm can contain spaces/parens, so find last ')' first
-            let after_comm = stat.rfind(')')? + 1;
-            let fields: Vec<&str> = stat[after_comm..].split_whitespace().collect();
-            // fields[0] = state, fields[1] = ppid
-            fields.get(1)?.parse().ok()
+            // comm may contain spaces/parens, so find the last ')' first.
+            let rest = &stat[stat.rfind(')')? + 1..];
+            rest.split_whitespace().nth(1)?.parse().ok()
         }
 
         pub fn list_children(pid: u32) -> Vec<u32> {
-            // Try /proc/{pid}/task/{pid}/children first (requires CONFIG_PROC_CHILDREN)
-            if let Ok(content) =
-                fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-            {
-                return content
-                    .split_whitespace()
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
+            if let Ok(s) = fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")) {
+                return s.split_whitespace().filter_map(|t| t.parse().ok()).collect();
             }
-
-            // Fallback: scan /proc for processes with matching ppid
-            let mut children = Vec::new();
+            // Fallback: scan all /proc entries
+            let mut out = Vec::new();
             if let Ok(entries) = fs::read_dir("/proc") {
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if let Ok(child_pid) = name_str.parse::<u32>() {
-                        if let Some(ppid) = getppid_of(child_pid) {
-                            if ppid == pid {
-                                children.push(child_pid);
-                            }
+                for e in entries.flatten() {
+                    if let Ok(child) = e.file_name().to_string_lossy().parse::<u32>() {
+                        if getppid_of(child) == Some(pid) {
+                            out.push(child);
                         }
                     }
                 }
             }
-            children
+            out
         }
 
         pub fn get_cwd_of(pid: u32) -> Option<PathBuf> {
@@ -534,341 +469,174 @@ mod vscode {
     mod platform {
         use std::path::PathBuf;
 
-        // Windows API types and constants
         type HANDLE = *mut std::ffi::c_void;
-        type DWORD = u32;
-        type BOOL = i32;
-
-        const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x1000;
-        const PROCESS_VM_READ: DWORD = 0x0010;
-        const TH32CS_SNAPPROCESS: DWORD = 0x00000002;
+        const INVALID_HANDLE: HANDLE = -1isize as HANDLE;
+        const TH32CS_SNAPPROCESS: u32 = 0x2;
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const PROCESS_VM_READ: u32 = 0x0010;
         const MAX_PATH: usize = 260;
 
         #[repr(C)]
         #[allow(non_snake_case)]
         struct PROCESSENTRY32W {
-            dwSize: DWORD,
-            cntUsage: DWORD,
-            th32ProcessID: DWORD,
-            th32DefaultHeapID: usize,
-            th32ModuleID: DWORD,
-            cntThreads: DWORD,
-            th32ParentProcessID: DWORD,
-            pcPriClassBase: i32,
-            dwFlags: DWORD,
+            dwSize: u32, cntUsage: u32, th32ProcessID: u32,
+            th32DefaultHeapID: usize, th32ModuleID: u32, cntThreads: u32,
+            th32ParentProcessID: u32, pcPriClassBase: i32, dwFlags: u32,
             szExeFile: [u16; MAX_PATH],
         }
-
-        // NtQueryInformationProcess structures
-        const PROCESS_BASIC_INFORMATION_CLASS: u32 = 0;
 
         #[repr(C)]
         #[allow(non_snake_case)]
         struct PROCESS_BASIC_INFORMATION {
-            Reserved1: *mut std::ffi::c_void,
-            PebBaseAddress: *mut PEB,
-            Reserved2: [*mut std::ffi::c_void; 2],
-            UniqueProcessId: usize,
-            Reserved3: *mut std::ffi::c_void,
+            Reserved1: usize, PebBaseAddress: usize,
+            Reserved2: [usize; 2], UniqueProcessId: usize, Reserved3: usize,
         }
 
         #[repr(C)]
         #[allow(non_snake_case)]
-        struct PEB {
-            Reserved1: [u8; 2],
-            BeingDebugged: u8,
-            Reserved2: [u8; 1],
-            Reserved3: [*mut std::ffi::c_void; 2],
-            Ldr: *mut std::ffi::c_void,
-            ProcessParameters: *mut RTL_USER_PROCESS_PARAMETERS,
-        }
-
-        #[repr(C)]
-        #[allow(non_snake_case)]
-        struct RTL_USER_PROCESS_PARAMETERS {
-            Reserved1: [u8; 16],
-            Reserved2: [*mut std::ffi::c_void; 10],
-            ImagePathName: UNICODE_STRING,
-            CommandLine: UNICODE_STRING,
-        }
-
-        #[repr(C)]
-        #[allow(non_snake_case)]
-        struct UNICODE_STRING {
-            Length: u16,
-            MaximumLength: u16,
-            Buffer: *mut u16,
-        }
+        struct UNICODE_STRING { Length: u16, MaximumLength: u16, Buffer: usize }
 
         extern "system" {
-            fn OpenProcess(dwDesiredAccess: DWORD, bInheritHandle: BOOL, dwProcessId: DWORD) -> HANDLE;
-            fn CloseHandle(hObject: HANDLE) -> BOOL;
-            fn CreateToolhelp32Snapshot(dwFlags: DWORD, th32ProcessID: DWORD) -> HANDLE;
-            fn Process32FirstW(hSnapshot: HANDLE, lppe: *mut PROCESSENTRY32W) -> BOOL;
-            fn Process32NextW(hSnapshot: HANDLE, lppe: *mut PROCESSENTRY32W) -> BOOL;
-            fn ReadProcessMemory(
-                hProcess: HANDLE,
-                lpBaseAddress: *const std::ffi::c_void,
-                lpBuffer: *mut std::ffi::c_void,
-                nSize: usize,
-                lpNumberOfBytesRead: *mut usize,
-            ) -> BOOL;
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> HANDLE;
+            fn CloseHandle(h: HANDLE) -> i32;
+            fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> HANDLE;
+            fn Process32FirstW(snap: HANDLE, entry: *mut PROCESSENTRY32W) -> i32;
+            fn Process32NextW(snap: HANDLE, entry: *mut PROCESSENTRY32W) -> i32;
+            fn ReadProcessMemory(proc_: HANDLE, addr: usize, buf: *mut u8,
+                                 sz: usize, read: *mut usize) -> i32;
+            fn NtQueryInformationProcess(proc_: HANDLE, class: u32, info: *mut u8,
+                                         len: u32, ret_len: *mut u32) -> i32;
         }
 
-        // ntdll
-        extern "system" {
-            fn NtQueryInformationProcess(
-                ProcessHandle: HANDLE,
-                ProcessInformationClass: u32,
-                ProcessInformation: *mut std::ffi::c_void,
-                ProcessInformationLength: u32,
-                ReturnLength: *mut u32,
-            ) -> i32;
+        /// Iterate the toolhelp snapshot, calling `f` for each entry.
+        /// Stops early if `f` returns `Some`.
+        unsafe fn with_snapshot<T>(mut f: impl FnMut(&PROCESSENTRY32W) -> Option<T>) -> Option<T> {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE { return None; }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut result = None;
+            if Process32FirstW(snap, &mut entry) != 0 {
+                loop {
+                    if let Some(v) = f(&entry) { result = Some(v); break; }
+                    if Process32NextW(snap, &mut entry) == 0 { break; }
+                }
+            }
+            CloseHandle(snap);
+            result
         }
-
-        const INVALID_HANDLE_VALUE: HANDLE = -1isize as HANDLE;
 
         pub fn getpid() -> u32 {
             std::process::id()
         }
 
+        pub fn get_name_of(pid: u32) -> Option<String> {
+            unsafe {
+                with_snapshot(|e| {
+                    if e.th32ProcessID == pid {
+                        let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(MAX_PATH);
+                        Some(String::from_utf16_lossy(&e.szExeFile[..len]))
+                    } else {
+                        None
+                    }
+                })
+            }
+        }
+
         pub fn getppid_of(pid: u32) -> Option<u32> {
             unsafe {
-                let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                if snap == INVALID_HANDLE_VALUE {
-                    return None;
-                }
-
-                let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-                entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as DWORD;
-
-                if Process32FirstW(snap, &mut entry) != 0 {
-                    loop {
-                        if entry.th32ProcessID == pid {
-                            CloseHandle(snap);
-                            return Some(entry.th32ParentProcessID);
-                        }
-                        if Process32NextW(snap, &mut entry) == 0 {
-                            break;
-                        }
-                    }
-                }
-                CloseHandle(snap);
+                with_snapshot(|e| {
+                    if e.th32ProcessID == pid { Some(e.th32ParentProcessID) } else { None }
+                })
             }
-            None
         }
 
         pub fn list_children(pid: u32) -> Vec<u32> {
-            let mut children = Vec::new();
+            let mut out = Vec::new();
             unsafe {
-                let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                if snap == INVALID_HANDLE_VALUE {
-                    return children;
-                }
-
-                let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-                entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as DWORD;
-
-                if Process32FirstW(snap, &mut entry) != 0 {
-                    loop {
-                        if entry.th32ParentProcessID == pid {
-                            children.push(entry.th32ProcessID);
-                        }
-                        if Process32NextW(snap, &mut entry) == 0 {
-                            break;
-                        }
-                    }
-                }
-                CloseHandle(snap);
+                with_snapshot(|e| {
+                    if e.th32ParentProcessID == pid { out.push(e.th32ProcessID); }
+                    None::<()>
+                });
             }
-            children
+            out
         }
 
         pub fn get_cwd_of(pid: u32) -> Option<PathBuf> {
             unsafe {
-                let handle = OpenProcess(
-                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
-                    0,
-                    pid,
-                );
-                if handle.is_null() {
-                    return None;
-                }
-
-                let result = read_process_cwd(handle);
-                CloseHandle(handle);
+                let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+                if h.is_null() { return None; }
+                let result = read_cwd(h);
+                CloseHandle(h);
                 result
             }
         }
 
-        unsafe fn read_process_cwd(handle: HANDLE) -> Option<PathBuf> {
-            // Get PEB address via NtQueryInformationProcess
+        unsafe fn read_remote<T: Copy>(handle: HANDLE, addr: usize) -> Option<T> {
+            let mut val: T = std::mem::zeroed();
+            let mut n = 0usize;
+            if ReadProcessMemory(handle, addr, &mut val as *mut T as *mut u8,
+                                 std::mem::size_of::<T>(), &mut n) == 0 { None }
+            else { Some(val) }
+        }
+
+        unsafe fn read_cwd(handle: HANDLE) -> Option<PathBuf> {
             let mut pbi: PROCESS_BASIC_INFORMATION = std::mem::zeroed();
-            let status = NtQueryInformationProcess(
-                handle,
-                PROCESS_BASIC_INFORMATION_CLASS,
-                &mut pbi as *mut _ as *mut std::ffi::c_void,
+            if NtQueryInformationProcess(
+                handle, 0, &mut pbi as *mut _ as *mut u8,
                 std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
                 std::ptr::null_mut(),
-            );
-            if status != 0 || pbi.PebBaseAddress.is_null() {
-                return None;
-            }
+            ) != 0 || pbi.PebBaseAddress == 0 { return None; }
 
-            // Read PEB from target process
-            let mut peb: PEB = std::mem::zeroed();
-            let mut bytes_read: usize = 0;
-            if ReadProcessMemory(
-                handle,
-                pbi.PebBaseAddress as *const std::ffi::c_void,
-                &mut peb as *mut _ as *mut std::ffi::c_void,
-                std::mem::size_of::<PEB>(),
-                &mut bytes_read,
-            ) == 0
-            {
-                return None;
-            }
+            // PEB.ProcessParameters is at offset 0x20 (x64)
+            let params_ptr: usize = read_remote(handle, pbi.PebBaseAddress + 0x20)?;
+            // RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath at offset 0x38
+            let dos_path: UNICODE_STRING = read_remote(handle, params_ptr + 0x38)?;
+            if dos_path.Buffer == 0 || dos_path.Length == 0 { return None; }
 
-            if peb.ProcessParameters.is_null() {
-                return None;
-            }
-
-            // Read RTL_USER_PROCESS_PARAMETERS to get CurrentDirectory
-            // CurrentDirectory is a CURDIR struct right after the fixed fields.
-            // Offset of CurrentDirectory in RTL_USER_PROCESS_PARAMETERS: 0x38 (x64)
-            // CURDIR = { UNICODE_STRING DosPath; HANDLE Handle; }
-            let params_addr = peb.ProcessParameters as usize;
-            let curdir_offset: usize = 0x38;
-
-            let mut dos_path: UNICODE_STRING = std::mem::zeroed();
-            if ReadProcessMemory(
-                handle,
-                (params_addr + curdir_offset) as *const std::ffi::c_void,
-                &mut dos_path as *mut _ as *mut std::ffi::c_void,
-                std::mem::size_of::<UNICODE_STRING>(),
-                &mut bytes_read,
-            ) == 0
-            {
-                return None;
-            }
-
-            if dos_path.Buffer.is_null() || dos_path.Length == 0 {
-                return None;
-            }
-
-            // Read the actual path string
             let len_chars = dos_path.Length as usize / 2;
             let mut buf = vec![0u16; len_chars];
-            if ReadProcessMemory(
-                handle,
-                dos_path.Buffer as *const std::ffi::c_void,
-                buf.as_mut_ptr() as *mut std::ffi::c_void,
-                dos_path.Length as usize,
-                &mut bytes_read,
-            ) == 0
-            {
-                return None;
-            }
+            let mut n = 0usize;
+            if ReadProcessMemory(handle, dos_path.Buffer, buf.as_mut_ptr() as *mut u8,
+                                 dos_path.Length as usize, &mut n) == 0 { return None; }
 
             let path = String::from_utf16_lossy(&buf);
-            // Remove trailing backslash if present (except for root like C:\)
             let trimmed = path.trim_end_matches('\\');
-            if trimmed.len() >= 3 {
-                Some(PathBuf::from(trimmed))
-            } else {
-                Some(PathBuf::from(&path))
-            }
+            Some(PathBuf::from(if trimmed.len() >= 3 { trimmed } else { &path }))
         }
     }
 }
 
-// --- Dispatch ---
-
-#[cfg(unix)]
-fn exec_dotnet(dotnet_path: &Path, args: &[String]) -> ! {
-    use std::os::unix::process::CommandExt;
-
-    verbose(&format!("Dispatching to: {}", dotnet_path.display()));
-
-    let mut cmd = std::process::Command::new(dotnet_path);
-    // Skip args[0] (our own name) and pass the rest
-    for arg in args.iter().skip(1) {
-        cmd.arg(arg);
-    }
-
-    // exec replaces the current process
-    let err = cmd.exec();
-
-    eprintln!(
-        "[dotnet-muxer] Failed to exec {}: {err}",
-        dotnet_path.display()
-    );
-    process::exit(127);
-}
-
-#[cfg(not(unix))]
-fn exec_dotnet(dotnet_path: &Path, args: &[String]) -> ! {
-    verbose(&format!("Dispatching to: {}", dotnet_path.display()));
-
-    let status = std::process::Command::new(dotnet_path)
-        .args(args.iter().skip(1))
-        .status();
-
-    match status {
-        Ok(s) => process::exit(s.code().unwrap_or(127)),
-        Err(e) => {
-            eprintln!(
-                "[dotnet-muxer] Failed to exec {}: {e}",
-                dotnet_path.display()
-            );
-            process::exit(127);
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 fn main() {
-    unsafe {
-        VERBOSE = env::var("DOTNET_MUXER_VERBOSE").is_ok();
-    }
+    VERBOSE.store(env::var_os("DOTNET_MUXER_VERBOSE").is_some(), Ordering::Relaxed);
 
     let args: Vec<String> = env::args().collect();
+    verbose(&format!("args: {}", args.join(" ")));
 
-    if unsafe { VERBOSE } {
-        eprintln!(
-            "[dotnet-muxer] args: {}",
-            args.iter()
-                .map(|a| a.as_str())
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-    }
-
-    let repo = find_repo_root();
-
-    if let Some(ref repo) = repo {
-        verbose(&format!("Repo root: {}", repo.root.display()));
-        verbose(&format!("SDK version: {}", repo.sdk_version));
-        verbose(&format!("TFM: {}", repo.tfm));
-
-        // Rule 1: Testhost invocation
-        if is_testhost_invocation(&args) {
-            if let Some(testhost) = find_testhost_dotnet(repo) {
+    // Rule 1: Testhost invocation inside a recognized repo
+    if is_testhost_invocation(&args) {
+        if let Some(repo) = find_repo_root() {
+            verbose(&format!("Repo: {} (SDK {})", repo.root.display(), repo.sdk_version));
+            if let Some(testhost) = find_testhost_dotnet(&repo) {
                 exec_dotnet(&testhost, &args);
             }
             verbose("Testhost not found, falling through");
         }
-
     }
 
-    // Rule 2: Walk up from cwd looking for .dotnet/dotnet
-    if let Some(local_dotnet) = find_local_dotnet() {
-        exec_dotnet(&local_dotnet, &args);
+    // Rule 2: Local .dotnet/dotnet (cwd walk, then VSCode sibling fallback)
+    if let Some(local) = find_local_dotnet() {
+        exec_dotnet(&local, &args);
     }
-    verbose("No .dotnet/dotnet found up the tree, falling through");
+    verbose("No .dotnet/dotnet found, falling through");
 
-    // Rule 3: Fallback to next dotnet in PATH
-    if let Some(system_dotnet) = find_next_dotnet_in_path() {
-        exec_dotnet(&system_dotnet, &args);
+    // Rule 3: Next dotnet in PATH
+    if let Some(system) = find_next_dotnet_in_path() {
+        exec_dotnet(&system, &args);
     }
 
     eprintln!("[dotnet-muxer] No dotnet found in PATH");
