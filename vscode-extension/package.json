@@ -1,0 +1,18 @@
+{
+  "name": "dotnet-muxer",
+  "displayName": "dotnet-muxer workspace tracker",
+  "description": "Registers VSCode workspace folders for dotnet-muxer",
+  "version": "0.2.0",
+  "publisher": "dotnet-muxer",
+  "engines": { "vscode": "^1.80.0" },
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dotnet-muxer.pruneWorkspaceFiles",
+        "title": "Dotnet Muxer: Prune Workspace Files"
+      }
+    ]
+  }
+}
