@@ -5,7 +5,7 @@
 // the pinned SDK to the repo's locally-built testhost.
 //
 // Build:   cargo build --release
-// Install: ./install.sh
+// Install: make install
 
 use std::env;
 use std::fs;

@@ -19,29 +19,60 @@ Arcade-based .NET repositories (like [dotnet/runtime](https://github.com/dotnet/
 
 ## Installation
 
-### macOS / Linux
-
 ```sh
 git clone https://github.com/rosebyte/dotnet-muxer.git
 cd dotnet-muxer
-./install.sh
+make install
 ```
 
-This builds the binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wrapper to your shell profile (`~/.zshrc` or `~/.bashrc`).
+This builds the binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wrapper to your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
+
+On Windows, run this from an environment where `make` is available (for example Git Bash, MSYS2, or WSL).
+If `make` is not available, you can run the scripts directly from the `scripts/` folder:
+
+```powershell
+.\scripts\install.ps1
+.\scripts\uninstall.ps1
+```
+
+## Runner Scripts
+
+You can also use the root runner scripts with a single action argument:
+
+### Unix / macOS
+
+```sh
+./run.sh install
+./run.sh uninstall
+./run.sh build
+```
 
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/rosebyte/dotnet-muxer.git
-cd dotnet-muxer
-.\install.ps1
+.\run.ps1 install
+.\run.ps1 uninstall
+.\run.ps1 build
 ```
 
-This builds the binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wrapper to your PowerShell profile.
+`build` runs `cargo clean` and then `cargo build --release`.
+
+If you pass an invalid action, the runners show usage/help:
+
+```sh
+./run.sh nope
+# Usage: ./run.sh <install|uninstall|build>
+```
+
+```powershell
+.\run.ps1 nope
+# Cannot validate argument on parameter 'Action'...
+```
 
 ### Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (for building from source)
+- `make`
 
 ## Environment Variables
 
@@ -58,7 +89,9 @@ This builds the binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wra
 make uninstall
 ```
 
-Then remove the `# >>> dotnet-muxer ... <<< dotnet-muxer` block from your shell profile.
+This removes the binary/log files and the `# >>> dotnet-muxer ... <<< dotnet-muxer` block from your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
+
+All install/uninstall scripts are located in `scripts/`.
 
 ## License
 
