@@ -7,3 +7,6 @@ description = "A smart dispatcher that routes dotnet invocations to the right ru
 [[bin]]
 name = "dotnet"
 path = "src/main.rs"
+
+[dependencies]
+time = { version = "0.3", features = ["formatting"] }

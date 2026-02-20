@@ -15,7 +15,7 @@ Arcade-based .NET repositories (like [dotnet/runtime](https://github.com/dotnet/
 3. Every `dotnet` invocation now hits the muxer first, which routes to the correct binary:
    - **Repo's local SDK** (`.dotnet/dotnet`) when `DOTNET_MUXER_TARGET` is set.
    - **Testhost redirect** — when the SDK invokes `vstest.console.dll`, the muxer redirects to the repo's locally-built testhost in `artifacts/bin/testhost/`, preferring the `Release` configuration.
-   - **Global fallback** — if `DOTNET_MUXER_TARGET` is not set, the muxer transparently forwards to the next `dotnet` found in `PATH`.
+   - **Strict target requirement** — if `DOTNET_MUXER_TARGET` is missing/empty, or `.dotnet/dotnet` does not exist under that path, the muxer exits with an error.
 
 ## Installation
 
