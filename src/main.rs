@@ -126,7 +126,7 @@ fn is_testhost_from_sdk(args: &[String], sdk_dir: &Path) -> bool {
         let path = Path::new(arg.as_str());
         path.file_name()
             .and_then(|n| n.to_str())
-            .map(|n| n.eq_ignore_ascii_case("testhost.dll"))
+            .map(|n| n.eq_ignore_ascii_case("vstest.console.dll"))
             .unwrap_or(false)
             && path.parent()
                 .and_then(|v| v.parent())
