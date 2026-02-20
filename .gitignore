@@ -1,3 +1,4 @@
+/.vscode
 /app/target
 Cargo.lock
 dotnet-muxer-*.*.*.vsix
