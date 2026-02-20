@@ -1,5 +1,5 @@
 /.vscode
-/app/target
+/target
 Cargo.lock
 dotnet-muxer-*.*.*.vsix
 /vscode-extension/bin

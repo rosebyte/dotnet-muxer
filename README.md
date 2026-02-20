@@ -33,13 +33,6 @@ On Windows (PowerShell):
 .\run.ps1 install
 ```
 
-You can also run scripts directly from the `scripts/` folder:
-
-```powershell
-.\scripts\install.ps1
-.\scripts\uninstall.ps1
-```
-
 ## Runner Scripts
 
 You can also use the root runner scripts with a single action argument:
@@ -98,8 +91,6 @@ If you pass an invalid action, the runners show usage/help:
 ```
 
 This removes the binary/log files and the `# >>> dotnet-muxer ... <<< dotnet-muxer` block from your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
-
-All install/uninstall scripts are located in `scripts/`.
 
 ## License
 
