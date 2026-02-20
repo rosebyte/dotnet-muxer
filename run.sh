@@ -18,8 +18,8 @@ case "$1" in
         bash "$(dirname "$0")/scripts/uninstall.sh"
         ;;
     build)
-        cargo clean
-        cargo build --release
+        cargo clean --manifest-path "$(dirname "$0")/app/Cargo.toml"
+        cargo build --release --manifest-path "$(dirname "$0")/app/Cargo.toml"
         ;;
     *)
         usage

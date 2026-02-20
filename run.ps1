@@ -17,10 +17,10 @@ switch ($Action) {
         exit $LASTEXITCODE
     }
     "build" {
-        cargo clean
+        cargo clean --manifest-path (Join-Path $Root "app/Cargo.toml")
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-        cargo build --release
+        cargo build --release --manifest-path (Join-Path $Root "app/Cargo.toml")
         exit $LASTEXITCODE
     }
 }

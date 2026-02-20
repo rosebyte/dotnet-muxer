@@ -22,13 +22,18 @@ Arcade-based .NET repositories (like [dotnet/runtime](https://github.com/dotnet/
 ```sh
 git clone https://github.com/rosebyte/dotnet-muxer.git
 cd dotnet-muxer
-make install
+./run.sh install
 ```
 
 This builds the binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wrapper to your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
 
-On Windows, run this from an environment where `make` is available (for example Git Bash, MSYS2, or WSL).
-If `make` is not available, you can run the scripts directly from the `scripts/` folder:
+On Windows (PowerShell):
+
+```powershell
+.\run.ps1 install
+```
+
+You can also run scripts directly from the `scripts/` folder:
 
 ```powershell
 .\scripts\install.ps1
@@ -72,7 +77,6 @@ If you pass an invalid action, the runners show usage/help:
 ### Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (for building from source)
-- `make`
 
 ## Environment Variables
 
@@ -86,7 +90,11 @@ If you pass an invalid action, the runners show usage/help:
 ## Uninstall
 
 ```sh
-make uninstall
+./run.sh uninstall
+```
+
+```powershell
+.\run.ps1 uninstall
 ```
 
 This removes the binary/log files and the `# >>> dotnet-muxer ... <<< dotnet-muxer` block from your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
