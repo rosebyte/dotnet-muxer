@@ -21,7 +21,9 @@ use std::time::SystemTime;
 
 struct LogEntry {
     file: Option<fs::File>,
+    parent_name: String,
     args: String,
+    cwd: String,
     pid: u32,
     target: Option<String>,
     messages: Vec<String>,
@@ -29,6 +31,7 @@ struct LogEntry {
 
 impl LogEntry {
     fn new() -> Self {
+        let pid = process::id();
         let file = env::var("DOTNET_MUXER_VERBOSE")
             .ok()
             .filter(|v| matches!(v.as_str(), "1" | "true" | "True" | "TRUE"))
@@ -38,8 +41,12 @@ impl LogEntry {
             });
         Self {
             file,
+            parent_name: parent_process_name(pid),
             args: env::args().collect::<Vec<_>>().join(" "),
-            pid: process::id(),
+            cwd: env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "unknown".to_string()),
+            pid,
             target: None,
             messages: Vec::new(),
         }
@@ -66,10 +73,42 @@ impl LogEntry {
 
         let _ = writeln!(
             f,
-            "ts={ts} pid={} args=\"{}\" target=\"{target}\"{msgs}",
-            self.pid, self.args
+            "ts={ts} parent=\"{}\" pid={} cwd=\"{}\" args=\"{}\" target=\"{target}\"{msgs}",
+            self.parent_name, self.pid, self.cwd, self.args
         );
     }
+}
+
+#[cfg(unix)]
+fn parent_process_name(pid: u32) -> String {
+    let pid_str = pid.to_string();
+    let ppid_output = process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", pid_str.as_str()])
+        .output();
+
+    let ppid = ppid_output
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<u32>().ok());
+
+    let Some(ppid) = ppid else {
+        return "unknown".to_string();
+    };
+
+    let ppid_str = ppid.to_string();
+    process::Command::new("ps")
+        .args(["-o", "comm=", "-p", ppid_str.as_str()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(not(unix))]
+fn parent_process_name(_pid: u32) -> String {
+    "unknown".to_string()
 }
 
 impl Drop for LogEntry {

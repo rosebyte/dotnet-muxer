@@ -39,7 +39,9 @@ code() {
         export DOTNET_MUXER_TARGET="\$(cd "\$1" && pwd)"
         export PATH="\$HOME/.dotnet-muxer:\$PATH"
         export DOTNET_MULTILEVEL_LOOKUP=0
-        export BuildTargetFramework=net11.0
+        if ! command -v mono >/dev/null 2>&1; then
+            export BuildTargetFramework=net11.0
+        fi
     fi
     if declare -f __dotnet_muxer_prev_code > /dev/null 2>&1; then
         __dotnet_muxer_prev_code "\$@"

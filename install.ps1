@@ -31,7 +31,6 @@ function code {
         `$env:DOTNET_MUXER_TARGET = `$repoRoot
         `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
         `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
-        `$env:BuildTargetFramework = "net11.0"
     }
     if (`$__dotnet_muxer_prev_code) {
         & `$__dotnet_muxer_prev_code @args

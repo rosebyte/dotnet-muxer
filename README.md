@@ -1,6 +1,6 @@
 # dotnet-muxer
 
-A smart dispatcher that routes `dotnet` invocations to the right runtime/SDK based on context. Built primarily to make **VS Code work properly with [Arcade](https://github.com/dotnet/arcade)-based repositories** that ship their own local .NET SDK in `.dotnet/`.
+A dispatcher that routes `dotnet` invocations to the right runtime/SDK based on context. Built primarily to make **VS Code work properly with [Arcade](https://github.com/dotnet/arcade)-based repositories** that ship their own local .NET SDK in `.dotnet/`.
 
 ## The Problem
 
@@ -50,7 +50,7 @@ This builds the binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wra
 | `DOTNET_MUXER_TARGET` | Repo root path. Set automatically by the `code` wrapper when the repo has `.dotnet/dotnet`. |
 | `DOTNET_MUXER_VERBOSE` | Set to `1` to enable logging to `~/.dotnet-muxer/log.log`. Useful for troubleshooting. |
 | `DOTNET_MULTILEVEL_LOOKUP` | Set to `0` by the wrapper to prevent .NET from searching higher-level shared locations. |
-| `BuildTargetFramework` | Set to `net11.0` by the wrapper for Arcade compatibility. |
+| `BuildTargetFramework` | Set to `net11.0` outside windows if mono is not installed. |
 
 ## Uninstall
 
