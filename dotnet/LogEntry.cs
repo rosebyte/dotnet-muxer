@@ -63,19 +63,78 @@ internal sealed class Logger
             return ParentProcessNameWindows(pid);
         }
 
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsLinux())
+        {
+            return ParentProcessNameLinux(pid);
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return ParentProcessNameMac(pid);
+        }
+
+        return (Unknown, 0);
+    }
+
+    private static (string Name, int ParentPid) ParentProcessNameLinux(int pid)
+    {
+        try
+        {
+            var statusPath = $"/proc/{pid}/status";
+            if (!File.Exists(statusPath))
+            {
+                return (Unknown, 0);
+            }
+
+            var ppid = 0;
+            foreach (var line in File.ReadLines(statusPath))
+            {
+                if (!line.StartsWith("PPid:", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var raw = line.Substring("PPid:".Length).Trim();
+                if (!int.TryParse(raw, out ppid) || ppid <= 0 || ppid == pid)
+                {
+                    return (Unknown, 0);
+                }
+
+                break;
+            }
+
+            if (ppid <= 0)
+            {
+                return (Unknown, 0);
+            }
+
+            var commPath = $"/proc/{ppid}/comm";
+            var parentName = File.Exists(commPath) ? File.ReadAllText(commPath).Trim() : Unknown;
+            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
+        }
+        catch
         {
             return (Unknown, 0);
         }
+    }
 
-        var ppidRaw = RunPs($"-o ppid= -p {pid}");
-        if (!int.TryParse(ppidRaw, out var ppid) || ppid <= 0 || ppid == pid)
+    private static (string Name, int ParentPid) ParentProcessNameMac(int pid)
+    {
+        try
+        {
+            var ppid = GetParentPidMac(pid);
+            if (ppid <= 0 || ppid == pid)
+            {
+                return (Unknown, 0);
+            }
+
+            var parentName = GetProcessNameMac(ppid);
+            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
+        }
+        catch
         {
             return (Unknown, 0);
         }
-
-        var parent = RunPs($"-o comm= -p {ppid}");
-        return (string.IsNullOrWhiteSpace(parent) ? Unknown : parent, ppid);
     }
 
     private static (string Name, int ParentPid) ParentProcessNameWindows(int pid)
@@ -97,9 +156,26 @@ internal sealed class Logger
         }
     }
 
-    private static string RunPs(string args)
+    private static int GetParentPidMac(int pid)
     {
-        return RunCommand("ps", args);
+        const int ProcPidTBsdInfo = 3;
+        const int BufferSize = 256;
+
+        var buffer = Marshal.AllocHGlobal(BufferSize);
+        try
+        {
+            var result = proc_pidinfo(pid, ProcPidTBsdInfo, 0, buffer, BufferSize);
+            if (result <= 20)
+            {
+                return 0;
+            }
+
+            return Marshal.ReadInt32(buffer, 16);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     private static int GetParentPidWindows(int pid)
@@ -129,34 +205,39 @@ internal sealed class Logger
         }
     }
 
-    private static string RunCommand(string fileName, string args)
+    private static string GetProcessNameMac(int pid)
     {
+        const int NameSize = 1024;
+        var buffer = Marshal.AllocHGlobal(NameSize);
         try
         {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = args,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
+            var len = proc_name(pid, buffer, (uint)NameSize);
+            if (len <= 0)
             {
                 return string.Empty;
             }
 
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit();
-            return output.Trim();
+            return Marshal.PtrToStringAnsi(buffer) ?? string.Empty;
         }
-        catch
+        finally
         {
-            return string.Empty;
+            Marshal.FreeHGlobal(buffer);
         }
     }
+
+    [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_pidinfo")]
+    private static extern int proc_pidinfo(
+        int pid,
+        int flavor,
+        ulong arg,
+        IntPtr buffer,
+        int buffersize);
+
+    [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_name")]
+    private static extern int proc_name(
+        int pid,
+        IntPtr buffer,
+        uint buffersize);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessBasicInformation
