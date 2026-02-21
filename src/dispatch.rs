@@ -9,7 +9,7 @@ pub fn run(dotnet_path: &Path, args: &[OsString]) -> ! {
     use std::os::unix::process::CommandExt;
 
     logger::run(dotnet_path, args);
-    let err = process::Command::new(dotnet_path).args(&args[1..]).exec();
+    let err = process::Command::new(dotnet_path).args(args).exec();
     eprintln!(
         "[dotnet-muxer] Failed to execute {}: {}",
         dotnet_path.display(),
@@ -20,7 +20,7 @@ pub fn run(dotnet_path: &Path, args: &[OsString]) -> ! {
 
 #[cfg(not(unix))]
 pub fn run(dotnet_path: &Path, args: &[OsString]) -> ! {
-    let exit_code = match process::Command::new(dotnet_path).args(&args[1..]).status() {
+    let exit_code = match process::Command::new(dotnet_path).args(args).status() {
         Ok(status) => status.code().unwrap_or(2),
         Err(error) => {
             eprintln!(
