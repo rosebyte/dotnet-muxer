@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace DotnetMuxer;
@@ -79,14 +80,21 @@ internal sealed class Logger
 
     private static (string Name, int ParentPid) ParentProcessNameWindows(int pid)
     {
-        var ppidRaw = RunPowerShell($"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').ParentProcessId");
-        if (!int.TryParse(ppidRaw, out var ppid) || ppid <= 0 || ppid == pid)
+        var ppid = GetParentPidWindows(pid);
+        if (ppid <= 0 || ppid == pid)
         {
             return (Unknown, 0);
         }
 
-        var parentName = RunPowerShell($"(Get-Process -Id {ppid} -ErrorAction SilentlyContinue).ProcessName");
-        return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
+        try
+        {
+            var parentName = Process.GetProcessById(ppid).ProcessName;
+            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
+        }
+        catch
+        {
+            return (Unknown, ppid);
+        }
     }
 
     private static string RunPs(string args)
@@ -94,9 +102,31 @@ internal sealed class Logger
         return RunCommand("ps", args);
     }
 
-    private static string RunPowerShell(string command)
+    private static int GetParentPidWindows(int pid)
     {
-        return RunCommand("powershell", $"-NoProfile -NonInteractive -Command \"{command}\"");
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            var handle = process.Handle;
+
+            var status = NtQueryInformationProcess(
+                handle,
+                0,
+                out var processInformation,
+                Marshal.SizeOf<ProcessBasicInformation>(),
+                out _);
+
+            if (status != 0)
+            {
+                return 0;
+            }
+
+            return (int)processInformation.InheritedFromUniqueProcessId;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     private static string RunCommand(string fileName, string args)
@@ -127,4 +157,23 @@ internal sealed class Logger
             return string.Empty;
         }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2_0;
+        public IntPtr Reserved2_1;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        out ProcessBasicInformation processInformation,
+        int processInformationLength,
+        out int returnLength);
 }
