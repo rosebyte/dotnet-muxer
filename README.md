@@ -1,6 +1,6 @@
 # dotnet-muxer
 
-A dispatcher that routes `dotnet` invocations to the right runtime/SDK based on context. Built primarily to make **VS Code work properly with [Arcade](https://github.com/dotnet/arcade)-based repositories** that ship their own local .NET SDK in `.dotnet/`.
+A .NET NativeAOT dispatcher that routes `dotnet` invocations to the right runtime/SDK based on context. Built primarily to make **VS Code work properly with [Arcade](https://github.com/dotnet/arcade)-based repositories** that ship their own local .NET SDK in `.dotnet/`.
 
 ## The Problem
 
@@ -25,7 +25,7 @@ cd dotnet-muxer
 ./run.sh install
 ```
 
-This builds the binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wrapper to your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
+This publishes the NativeAOT binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wrapper to your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
 
 On Windows (PowerShell):
 
@@ -43,8 +43,6 @@ You can also use the root runner scripts with a single action argument:
 ./run.sh install
 ./run.sh uninstall
 ./run.sh build
-./run.sh bench
-./run.sh bench-forward
 ```
 
 ### Windows (PowerShell)
@@ -53,20 +51,15 @@ You can also use the root runner scripts with a single action argument:
 .\run.ps1 install
 .\run.ps1 uninstall
 .\run.ps1 build
-.\run.ps1 bench
-.\run.ps1 bench-forward
 ```
 
-`build` runs `cargo clean` and then `cargo build --release`.
-`bench` builds Rust + .NET AOT, prints binary sizes, and runs a startup benchmark.
-`bench-forward` benchmarks actual forwarding using a temporary repo with `.dotnet/dotnet`.
-Set `BENCH_RUNS` to change iteration count (default: `200`).
+`build` publishes the .NET NativeAOT project for the current platform RID.
 
 If you pass an invalid action, the runners show usage/help:
 
 ```sh
 ./run.sh nope
-# Usage: ./run.sh <install|uninstall|build|bench|bench-forward>
+# Usage: ./run.sh <install|uninstall|build>
 ```
 
 ```powershell
@@ -76,7 +69,7 @@ If you pass an invalid action, the runners show usage/help:
 
 ### Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (for building from source)
+- [.NET SDK](https://dotnet.microsoft.com/download)
 
 ## Environment Variables
 
