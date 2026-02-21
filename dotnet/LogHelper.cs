@@ -4,7 +4,7 @@ using System.Text;
 
 namespace DotnetMuxer;
 
-internal sealed class Logger
+internal sealed class LogHelper
 {
     internal const string Unknown = "unknown";
 

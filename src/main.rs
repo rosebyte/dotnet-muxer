@@ -1,322 +1,99 @@
-// dotnet-muxer: Routes dotnet invocations to the right runtime/SDK.
-//
-// Requires DOTNET_MUXER_TARGET env var (dotnet executable path). Uses
-// that dotnet path directly and redirects testhost.dll invocations from
-// the pinned SDK to the repo's locally-built testhost.
-//
-// Build:   cargo build --release
-// Install: make install
+mod dispatch;
+mod logger;
 
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
 
-const EXIT_EXEC_ERROR: i32 = 127;
-const UNKNOWN: &str = "unknown";
 const DOTNET_MUXER_TARGET: &str = "DOTNET_MUXER_TARGET";
-const TIMESTAMP_FALLBACK: &str = "????-??-??T??:??:??Z";
 
-// ---------------------------------------------------------------------------
-// Logging — single atomic write per invocation
-// ---------------------------------------------------------------------------
+fn main() {
+    let args: Vec<OsString> = env::args_os().collect();
 
-struct LogEntry {
-    file: fs::File,
-    parent_name: String,
-    args: String,
-    cwd: String,
-    pid: u32,
-    target: Option<String>,
-    messages: Vec<String>,
-}
-
-impl LogEntry {
-    fn new() -> Option<Self> {
-        let pid = process::id();
-        let file = env::var("DOTNET_MUXER_VERBOSE")
-            .ok()
-            .filter(|v| matches!(v.as_str(), "1" | "true" | "True" | "TRUE"))
-            .and_then(|_| {
-                let log_path = env::current_exe().ok()?.parent()?.join("log.log");
-                fs::OpenOptions::new().create(true).append(true).open(log_path).ok()
-            })?;
-
-        Some(Self {
-            file,
-            parent_name: parent_process_name(pid),
-            args: env::args().collect::<Vec<_>>().join(" "),
-            cwd: env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| UNKNOWN.to_string()),
-            pid,
-            target: None,
-            messages: Vec::new(),
-        })
-    }
-
-    fn msg(&mut self, msg: impl Into<String>) {
-        self.messages.push(msg.into());
-    }
-
-    fn dispatch(&mut self, path: &Path) {
-        self.target = Some(path.display().to_string());
-    }
-
-    fn flush(&mut self) {
-        let ts = timestamp();
-        let target = self.target.as_deref().unwrap_or("none");
-        let msgs = if self.messages.is_empty() {
-            String::new()
-        } else {
-            format!(" messages=\"{}\"", self.messages.join("; "))
-        };
-
-        let _ = writeln!(
-            self.file,
-            "ts={ts} parent=\"{}\" pid={} cwd=\"{}\" args=\"{}\" target=\"{target}\"{msgs}",
-            self.parent_name,
-            self.pid,
-            self.cwd,
-            self.args
-        );
-    }
-}
-
-#[cfg(unix)]
-fn parent_process_name(pid: u32) -> String {
-    let ppid = ps_field(pid, "ppid=").and_then(|s| s.parse::<u32>().ok());
-
-    ppid
-        .and_then(|id| ps_field(id, "comm="))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| UNKNOWN.to_string())
-}
-
-#[cfg(not(unix))]
-fn parent_process_name(_pid: u32) -> String {
-    UNKNOWN.to_string()
-}
-
-#[cfg(unix)]
-fn ps_field(pid: u32, field: &str) -> Option<String> {
-    let pid = pid.to_string();
-    process::Command::new("ps")
-        .args(["-o", field, "-p", pid.as_str()])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-}
-
-impl Drop for LogEntry {
-    fn drop(&mut self) {
-        self.flush();
-    }
-}
-
-fn timestamp() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-    .unwrap_or_else(|_| TIMESTAMP_FALLBACK.to_string())
-}
-
-// ---------------------------------------------------------------------------
-// Platform helpers
-// ---------------------------------------------------------------------------
-
-fn dotnet_exe() -> &'static str {
-    if cfg!(windows) { "dotnet.exe" } else { "dotnet" }
-}
-
-// ---------------------------------------------------------------------------
-// Testhost detection
-// ---------------------------------------------------------------------------
-
-fn is_testhost_from_sdk(args: &[OsString], sdk_dir: &Path) -> bool {
-    let sdk_root = sdk_dir.join("sdk");
-    args.iter().any(|arg| {
-        let path = Path::new(arg);
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.eq_ignore_ascii_case("vstest.console.dll"))
-            .unwrap_or(false)
-            && path.parent()
-                .and_then(|v| v.parent())
-                .map(|p| p == sdk_root)
-                .unwrap_or(false)
-    })
-}
-
-fn find_testhost_dotnet(repo_root: &Path) -> Option<PathBuf> {
-    let testhost_dir = repo_root.join("artifacts/bin/testhost");
-    let mut fallback: Option<PathBuf> = None;
-
-    for entry in fs::read_dir(&testhost_dir).ok()?.flatten() {
-        let candidate = entry.path().join(dotnet_exe());
-        if !candidate.is_file() {
-            continue;
-        }
-
-        if fallback.is_none() {
-            fallback = Some(candidate.clone());
-        }
-
-        if candidate.components().any(|c| c.as_os_str() == "Release") {
-            return Some(candidate);
-        }
-    }
-    fallback
-}
-
-// ---------------------------------------------------------------------------
-// Dispatch
-// ---------------------------------------------------------------------------
-
-#[cfg(unix)]
-fn exec_dotnet_fast(dotnet_path: &Path, args: &[OsString]) -> ! {
-    use std::os::unix::process::CommandExt;
-    let err = process::Command::new(dotnet_path).args(args).exec();
-    eprintln!("[dotnet-muxer] Failed to exec {}: {err}", dotnet_path.display());
-    process::exit(EXIT_EXEC_ERROR);
-}
-
-#[cfg(not(unix))]
-fn exec_dotnet_fast(dotnet_path: &Path, args: &[OsString]) -> ! {
-    match process::Command::new(dotnet_path).args(args).status() {
-        Ok(status) => process::exit(status.code().unwrap_or(EXIT_EXEC_ERROR)),
-        Err(e) => {
-            eprintln!("[dotnet-muxer] Failed to exec {}: {e}", dotnet_path.display());
-            process::exit(EXIT_EXEC_ERROR);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn exec_dotnet_verbose(dotnet_path: &Path, args: &[OsString], log: &mut LogEntry) -> ! {
-    use std::os::unix::process::CommandExt;
-    log.dispatch(dotnet_path);
-    log.flush();
-    let err = process::Command::new(dotnet_path).args(args).exec();
-    eprintln!("[dotnet-muxer] Failed to exec {}: {err}", dotnet_path.display());
-    process::exit(EXIT_EXEC_ERROR);
-}
-
-#[cfg(not(unix))]
-fn exec_dotnet_verbose(dotnet_path: &Path, args: &[OsString], log: &mut LogEntry) -> ! {
-    log.dispatch(dotnet_path);
-    log.flush();
-    match process::Command::new(dotnet_path).args(args).status() {
-        Ok(status) => process::exit(status.code().unwrap_or(EXIT_EXEC_ERROR)),
-        Err(e) => {
-            eprintln!("[dotnet-muxer] Failed to exec {}: {e}", dotnet_path.display());
-            process::exit(EXIT_EXEC_ERROR);
-        }
-    }
-}
-
-fn require_target_path_fast() -> PathBuf {
-    match env::var_os(DOTNET_MUXER_TARGET) {
+    let target_path = match env::var_os(DOTNET_MUXER_TARGET) {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => {
-            eprintln!("[dotnet-muxer] DOTNET_MUXER_TARGET is required");
-            process::exit(EXIT_EXEC_ERROR);
+            eprintln!("[dotnet-muxer] {DOTNET_MUXER_TARGET} is not set");
+            process::exit(1);
         }
+    };
+
+    if !target_path.is_file() {
+        eprintln!(
+            "[dotnet-muxer] DOTNET_MUXER_TARGET not found: {}",
+            target_path.display()
+        );
+        process::exit(1);
     }
+
+    let target_path = try_get_testhost_path(&args, target_path);
+    dispatch::run(&target_path, &args);
 }
 
-fn require_target_path_verbose(log: &mut LogEntry) -> PathBuf {
-    match env::var_os(DOTNET_MUXER_TARGET) {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
-        _ => fail(
-            log,
-            "DOTNET_MUXER_TARGET not set",
-            "[dotnet-muxer] DOTNET_MUXER_TARGET is required",
-        ),
+fn try_get_testhost_path(args: &[OsString], target_path: PathBuf) -> PathBuf {
+    if args.is_empty() || args.len() < 2 {
+        return target_path;
     }
+
+    let argument = PathBuf::from(&args[1]);
+    let is_vstest = argument
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case("vstest.console.dll"))
+        .unwrap_or(false);
+    if !is_vstest {
+        return target_path;
+    }
+
+    let Some(repo_root) = repo_root_from_target(&target_path) else {
+        return target_path;
+    };
+
+    let sdk_root = repo_root.join(".dotnet").join("sdk");
+    let full_argument = fs::canonicalize(&argument).unwrap_or(argument);
+    if !full_argument.starts_with(&sdk_root) {
+        return target_path;
+    }
+
+    let testhost_dir = repo_root.join("artifacts").join("bin").join("testhost");
+    if !testhost_dir.is_dir() {
+        return target_path;
+    }
+
+    let dotnet_name = if cfg!(windows) {
+        OsStr::new("dotnet.exe")
+    } else {
+        OsStr::new("dotnet")
+    };
+
+    let mut selected = target_path;
+
+    if let Ok(entries) = fs::read_dir(&testhost_dir) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join(dotnet_name);
+            if !candidate.is_file() {
+                continue;
+            }
+
+            let is_release = candidate
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("Release"));
+            selected = candidate;
+            if is_release {
+                return selected;
+            }
+        }
+    }
+
+    selected
 }
 
 fn repo_root_from_target(target_path: &Path) -> Option<PathBuf> {
     let dotnet_dir = target_path.parent()?;
-    if dotnet_dir.file_name()? != std::ffi::OsStr::new(".dotnet") {
+    if dotnet_dir.file_name()? != OsStr::new(".dotnet") {
         return None;
     }
     Some(dotnet_dir.parent()?.to_path_buf())
-}
-
-fn ensure_target_dotnet_exists(log: &mut LogEntry, target_path: &Path) {
-    if target_path.is_file() {
-        return;
-    }
-
-    let msg = format!("{} not found", target_path.display());
-    let err = format!("[dotnet-muxer] DOTNET_MUXER_TARGET not found: {}", target_path.display());
-    fail(log, &msg, &err);
-}
-
-fn fail(log: &mut LogEntry, log_msg: &str, err_msg: &str) -> ! {
-    log.msg(log_msg);
-    eprintln!("{err_msg}");
-    process::exit(EXIT_EXEC_ERROR);
-}
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-fn main() {
-    if let Some(mut log) = LogEntry::new() {
-        let mut args = env::args_os();
-        let _ = args.next();
-        let forwarded_args: Vec<OsString> = args.collect();
-
-        let target_path = require_target_path_verbose(&mut log);
-        ensure_target_dotnet_exists(&mut log, &target_path);
-
-        if !forwarded_args.is_empty() {
-            if let Some(repo_root) = repo_root_from_target(&target_path) {
-                let dotnet_dir = repo_root.join(".dotnet");
-                if is_testhost_from_sdk(&forwarded_args, &dotnet_dir) {
-                    if let Some(testhost) = find_testhost_dotnet(&repo_root) {
-                        log.msg("testhost redirect");
-                        exec_dotnet_verbose(&testhost, &forwarded_args, &mut log);
-                    }
-                    log.msg("testhost not found, falling through");
-                }
-            }
-        }
-
-        exec_dotnet_verbose(&target_path, &forwarded_args, &mut log);
-    }
-
-    let mut args = env::args_os();
-    let _ = args.next();
-    let first_arg = args.next();
-
-    let target_path = require_target_path_fast();
-
-    if first_arg.is_none() {
-        exec_dotnet_fast(&target_path, &[]);
-    }
-
-    let mut forwarded_args = Vec::new();
-    forwarded_args.push(first_arg.expect("first_arg is checked above"));
-    forwarded_args.extend(args);
-
-    if !forwarded_args.is_empty() {
-        if let Some(repo_root) = repo_root_from_target(&target_path) {
-            let dotnet_dir = repo_root.join(".dotnet");
-            if is_testhost_from_sdk(&forwarded_args, &dotnet_dir) {
-                if let Some(testhost) = find_testhost_dotnet(&repo_root) {
-                    exec_dotnet_fast(&testhost, &forwarded_args);
-                }
-            }
-        }
-    }
-
-    exec_dotnet_fast(&target_path, &forwarded_args);
 }

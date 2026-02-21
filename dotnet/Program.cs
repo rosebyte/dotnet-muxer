@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace DotnetMuxer;
 
 internal static class Program
@@ -16,14 +14,14 @@ internal static class Program
         }
 
         TryGetTestHostPath(args, ref targetPath);
-        var exitCode = Execute(targetPath, args);
-        Logger.Run(targetPath, args);
+        var exitCode = DispatchHelper.Execute(targetPath, args);
+        LogHelper.Run(targetPath, args);
         return exitCode;
     }
 
     private static void TryGetTestHostPath(string[] args, ref string testHostPath)
     {
-        if (args.Length < 1)
+        if (args.Length == 0)
         {
             return;
         }
@@ -31,7 +29,7 @@ internal static class Program
         var argument = args[0];
         if (!argument.EndsWith("vstest.console.dll", StringComparison.OrdinalIgnoreCase))
         {
-            return; 
+            return;
         }
 
         var repoRoot = testHostPath.Substring(0, testHostPath.Length - "/.dotnet/dotnet".Length);
@@ -58,49 +56,10 @@ internal static class Program
             }
 
             testHostPath = candidate;
-
             if (candidate.Contains("Release", StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
         }
-    }
-
-    private static int Execute(string dotnetPath, string[] args)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = dotnetPath,
-            UseShellExecute = false
-        };
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            startInfo.ArgumentList.Add(args[i]);
-        }
-
-        try
-        {
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                Console.Error.WriteLine($"[dotnet-muxer] Failed to start {dotnetPath}.");
-                return 2;
-            }
-
-            process.WaitForExit();
-            return process.ExitCode;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[dotnet-muxer] Failed to execute {dotnetPath}: {ex.Message}{FormatStackTrace(ex)}");
-            return 3;
-        }
-    }
-
-    private static string FormatStackTrace(Exception exception)
-    {
-        var stackTrace = exception.StackTrace?.Trim().Replace(Environment.NewLine, $"{Environment.NewLine}[dotnet-muxer] ");
-        return stackTrace is null ? string.Empty : $"{Environment.NewLine}{stackTrace}";
     }
 }
