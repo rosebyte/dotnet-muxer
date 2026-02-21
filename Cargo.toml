@@ -10,3 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 time = { version = "0.3", features = ["formatting"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
