@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework Condition="'$(BuildTargetFramework)' == ''">net10.0</TargetFramework>
+    <TargetFramework Condition="'$(BuildTargetFramework)' != ''">$(BuildTargetFramework)</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <StripSymbols>true</StripSymbols>
+    <DebuggerSupport>false</DebuggerSupport>
+    <StackTraceSupport>false</StackTraceSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <UseSizeOptimizedLinq>true</UseSizeOptimizedLinq>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <SelfContained>true</SelfContained>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' and $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win-'))">
+    <DefineConstants>$(DefineConstants);DOTNETMUXER_WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' and $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-'))">
+    <DefineConstants>$(DefineConstants);DOTNETMUXER_LINUX</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' and $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('osx-'))">
+    <DefineConstants>$(DefineConstants);DOTNETMUXER_DARWIN</DefineConstants>
+  </PropertyGroup>
+
+  <Target Name="RequireRuntimeIdentifier" BeforeTargets="Restore;PrepareForBuild">
+    <Error Condition="'$(RuntimeIdentifier)' == ''" Text="RuntimeIdentifier is required. Use -r win-x64, -r linux-x64, -r osx-arm64, etc." />
+    <Error Condition="!$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win-')) and !$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')) and !$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('osx-'))" Text="Unsupported RuntimeIdentifier '$(RuntimeIdentifier)'. Expected win-*, linux-*, or osx-*" />
+  </Target>
+
+</Project>

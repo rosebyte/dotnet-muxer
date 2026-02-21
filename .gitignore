@@ -1,0 +1,8 @@
+/.vscode
+/.vs
+.DS_Store
+**/bin/
+**/obj/
+*.user
+*.suo
+*.nupkg
