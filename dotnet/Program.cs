@@ -48,10 +48,8 @@ internal static class Program
 
 #if DOTNETMUXER_WINDOWS
         var dotnet = "dotnet.exe";
-#elif DOTNETMUXER_LINUX || DOTNETMUXER_DARWIN
-        var dotnet = "dotnet";
 #else
-        var dotnet = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        var dotnet = "dotnet";
 #endif
 
         foreach (var entry in Directory.EnumerateDirectories(testhostDir))

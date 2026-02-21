@@ -39,18 +39,6 @@ internal sealed class LogHelper
 
     private static void AddParents(StringBuilder sb, int pid)
     {
-#if !DOTNETMUXER_WINDOWS && !DOTNETMUXER_LINUX && !DOTNETMUXER_DARWIN
-        var getParentProcess = WindowsHelper.GetParentProcess;
-        if (OperatingSystem.IsLinux())
-        {
-            getParentProcess = LinuxHelper.GetParentProcess;
-        }
-        else if (OperatingSystem.IsMacOS())
-        {
-            getParentProcess = DarwinHelper.GetParentProcess;
-        }
-#endif
-
         var visited = new HashSet<int>();
 
         while (pid != 0)
@@ -67,7 +55,7 @@ internal sealed class LogHelper
 #elif DOTNETMUXER_DARWIN
         var (parentName, parentId) = DarwinHelper.GetParentProcess(pid);
 #else
-        var (parentName, parentId) = getParentProcess(pid);
+    var (parentName, parentId) = (Unknown, 0);
 #endif
             Write(sb, "parent", $"({parentId}) {parentName}");
             pid = parentId;

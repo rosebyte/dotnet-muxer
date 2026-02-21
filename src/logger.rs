@@ -1,6 +1,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 use std::process;
@@ -50,8 +51,8 @@ pub fn run(target_path: &Path, args: &[OsString]) {
     line.push_str(") ");
     line.push_str(&process_text);
     line.push_str("\" ");
-    line.push_str("parent=\"");
-    line.push_str(&parent_process_name(process::id()));
+    line.push_str("parents=\"");
+    line.push_str(&parent_process_chain(process::id()));
     line.push_str("\" ");
     line.push_str("ts=\"");
     line.push_str(&timestamp());
@@ -63,20 +64,48 @@ pub fn run(target_path: &Path, args: &[OsString]) {
 }
 
 #[cfg(unix)]
-fn parent_process_name(pid: u32) -> String {
-    let ppid = ps_field(pid, "ppid=").and_then(|value| value.parse::<u32>().ok());
-    let parent_name = ppid.and_then(|parent_id| ps_field(parent_id, "comm="));
+fn parent_process_chain(start_pid: u32) -> String {
+    let mut visited = HashSet::new();
+    let mut chain = Vec::new();
+    let mut pid = start_pid;
 
-    match (ppid, parent_name) {
-        (Some(parent_id), Some(name)) if !name.is_empty() => format!("({parent_id}) {name}"),
-        (Some(parent_id), _) => format!("({parent_id}) {UNKNOWN}"),
-        _ => UNKNOWN.to_string(),
+    while pid != 0 {
+        if !visited.insert(pid) {
+            break;
+        }
+
+        let Some((parent_pid, parent_name)) = parent_of(pid) else {
+            break;
+        };
+
+        chain.push(format!("({parent_pid}) {parent_name}"));
+        pid = parent_pid;
+    }
+
+    if chain.is_empty() {
+        UNKNOWN.to_string()
+    } else {
+        chain.join(" -> ")
     }
 }
 
 #[cfg(not(unix))]
-fn parent_process_name(_pid: u32) -> String {
+fn parent_process_chain(_pid: u32) -> String {
     UNKNOWN.to_string()
+}
+
+#[cfg(unix)]
+fn parent_of(pid: u32) -> Option<(u32, String)> {
+    let parent_pid = ps_field(pid, "ppid=")?.parse::<u32>().ok()?;
+    if parent_pid == 0 || parent_pid == pid {
+        return None;
+    }
+
+    let parent_name = ps_field(parent_pid, "comm=")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| UNKNOWN.to_string());
+
+    Some((parent_pid, parent_name))
 }
 
 #[cfg(unix)]

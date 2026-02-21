@@ -31,4 +31,9 @@
     <DefineConstants>$(DefineConstants);DOTNETMUXER_DARWIN</DefineConstants>
   </PropertyGroup>
 
+  <Target Name="RequireRuntimeIdentifier" BeforeTargets="Restore;PrepareForBuild">
+    <Error Condition="'$(RuntimeIdentifier)' == ''" Text="RuntimeIdentifier is required. Use -r win-x64, -r linux-x64, -r osx-arm64, etc." />
+    <Error Condition="!$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win-')) and !$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')) and !$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('osx-'))" Text="Unsupported RuntimeIdentifier '$(RuntimeIdentifier)'. Expected win-*, linux-*, or osx-*" />
+  </Target>
+
 </Project>
