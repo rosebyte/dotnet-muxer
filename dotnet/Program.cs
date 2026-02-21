@@ -17,7 +17,7 @@ internal static class Program
 
         TryGetTestHostPath(args, ref targetPath);
         var exitCode = Execute(targetPath, args);
-        LogEntry.CreateIfVerbose()?.Dispatch(targetPath);
+        Logger.Run(targetPath, args);
         return exitCode;
     }
 
