@@ -25,6 +25,8 @@ pub(crate) fn write_parent_fields(line: &mut String, start_pid: u32) {
     if !wrote_any {
         write_field(line, "parent", &format!("(0) {UNKNOWN}"));
     }
+
+    return;
 }
 
 fn parent_of(pid: u32) -> Option<(u32, String)> {
@@ -50,5 +52,5 @@ fn parent_of(pid: u32) -> Option<(u32, String)> {
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| UNKNOWN.to_string());
 
-    Some((parent_pid, parent_name))
+    return Some((parent_pid, parent_name));
 }

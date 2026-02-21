@@ -56,9 +56,9 @@ pub fn run(target_path: &Path, args: &[OsString]) {
 }
 
 fn timestamp() -> String {
-    OffsetDateTime::now_utc()
+    return OffsetDateTime::now_utc()
         .format(&Rfc3339)
-        .unwrap_or_else(|_| TIMESTAMP_FALLBACK.to_string())
+        .unwrap_or_else(|_| TIMESTAMP_FALLBACK.to_string());
 }
 
 fn write_field(line: &mut String, key: &str, value: &str) {
@@ -66,4 +66,5 @@ fn write_field(line: &mut String, key: &str, value: &str) {
     line.push_str("=\"");
     line.push_str(value);
     line.push_str("\" ");
+    return;
 }

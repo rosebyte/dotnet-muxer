@@ -29,6 +29,8 @@ pub(crate) fn write_parent_fields(line: &mut String, start_pid: u32) {
     if !wrote_any {
         write_field(line, "parent", &format!("(0) {UNKNOWN}"));
     }
+
+    return;
 }
 
 fn parent_of(pid: u32) -> Option<(u32, String)> {
@@ -77,7 +79,7 @@ fn parent_of(pid: u32) -> Option<(u32, String)> {
         let cstr = unsafe { CStr::from_ptr(name_buf.as_ptr() as *const c_char) };
         let value = cstr.to_string_lossy().trim().to_string();
         if value.is_empty() {
-            UNKNOWN.to_string()
+            return Some((parent_pid, UNKNOWN.to_string()));
         } else {
             value
         }
@@ -85,5 +87,5 @@ fn parent_of(pid: u32) -> Option<(u32, String)> {
         UNKNOWN.to_string()
     };
 
-    Some((parent_pid, parent_name))
+    return Some((parent_pid, parent_name));
 }

@@ -8,12 +8,12 @@ const DOTNET_MUXER_TARGET: &str = "DOTNET_MUXER_TARGET";
 
 pub(crate) fn resolve_dispatch_target(args: &[OsString]) -> PathBuf {
     let target_path = read_target_or_exit();
-    try_get_testhost_path(args, target_path)
+    return try_get_testhost_path(args, target_path);
 }
 
 fn read_target_or_exit() -> PathBuf {
     match env::var_os(DOTNET_MUXER_TARGET) {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
+        Some(value) if !value.is_empty() => return PathBuf::from(value),
         _ => {
             eprintln!("[dotnet-muxer] {DOTNET_MUXER_TARGET} is not set");
             process::exit(1);
@@ -93,5 +93,5 @@ fn try_get_testhost_path(args: &[OsString], target_path: PathBuf) -> PathBuf {
         }
     }
 
-    selected
+    return selected;
 }

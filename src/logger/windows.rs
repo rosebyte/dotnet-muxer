@@ -29,6 +29,8 @@ pub(crate) fn write_parent_fields(line: &mut String, start_pid: u32) {
     if !wrote_any {
         write_field(line, "parent", &format!("(0) {UNKNOWN}"));
     }
+
+    return;
 }
 
 fn parent_of(pid: u32) -> Option<(u32, String)> {
@@ -91,5 +93,5 @@ fn parent_of(pid: u32) -> Option<(u32, String)> {
         CloseHandle(snapshot);
     }
 
-    Some((parent_pid, parent_name))
+    return Some((parent_pid, parent_name));
 }
