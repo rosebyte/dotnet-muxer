@@ -11,11 +11,11 @@ Arcade-based .NET repositories (like [dotnet/runtime](https://github.com/dotnet/
 `dotnet-muxer` installs a small `dotnet` binary into `~/.dotnet-muxer/` and injects a shell wrapper around the `code` command. When you open a repo with `code /path/to/repo`:
 
 1. The wrapper detects if the repo has a `.dotnet/dotnet` (the local SDK).
-2. If so, it sets `DOTNET_MUXER_TARGET` to the repo root and prepends `~/.dotnet-muxer` to `PATH`.
+2. If so, it sets `DOTNET_MUXER_TARGET` to the local SDK executable path (`<repo>/.dotnet/dotnet`) and prepends `~/.dotnet-muxer` to `PATH`.
 3. Every `dotnet` invocation now hits the muxer first, which routes to the correct binary:
-   - **Repo's local SDK** (`.dotnet/dotnet`) when `DOTNET_MUXER_TARGET` is set.
+   - **Configured SDK executable** — the path in `DOTNET_MUXER_TARGET`.
    - **Testhost redirect** — when the SDK invokes `vstest.console.dll`, the muxer redirects to the repo's locally-built testhost in `artifacts/bin/testhost/`, preferring the `Release` configuration.
-   - **Strict target requirement** — if `DOTNET_MUXER_TARGET` is missing/empty, or `.dotnet/dotnet` does not exist under that path, the muxer exits with an error.
+   - **Strict target requirement** — if `DOTNET_MUXER_TARGET` is missing/empty, or the target executable path does not exist, the muxer exits with an error.
 
 ## Installation
 
@@ -82,7 +82,7 @@ If you pass an invalid action, the runners show usage/help:
 
 | Variable | Description |
 |---|---|
-| `DOTNET_MUXER_TARGET` | Repo root path. Set automatically by the `code` wrapper when the repo has `.dotnet/dotnet`. |
+| `DOTNET_MUXER_TARGET` | Full path to the target `dotnet` executable. Set automatically by the `code` wrapper to `<repo>/.dotnet/dotnet` (or `.exe` on Windows). |
 | `DOTNET_MUXER_VERBOSE` | Set to `1` to enable logging to `~/.dotnet-muxer/log.log`. Useful for troubleshooting. |
 | `DOTNET_MULTILEVEL_LOOKUP` | Set to `0` by the wrapper to prevent .NET from searching higher-level shared locations. |
 | `BuildTargetFramework` | Set to `net11.0` outside windows if mono is not installed. |

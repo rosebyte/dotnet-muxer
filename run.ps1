@@ -41,7 +41,7 @@ function code {
     if (`$args.Count -ge 1 -and (Test-Path `$args[0] -PathType Container) -and
         (Test-Path (Join-Path `$args[0] ".dotnet\dotnet.exe"))) {
         `$repoRoot = (Resolve-Path `$args[0]).Path
-        `$env:DOTNET_MUXER_TARGET = `$repoRoot
+        `$env:DOTNET_MUXER_TARGET = (Join-Path `$repoRoot ".dotnet\dotnet.exe")
         `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
         `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
     }
@@ -206,13 +206,13 @@ with tempfile.TemporaryDirectory(prefix='dotnet-muxer-bench-') as tmp:
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     env = os.environ.copy()
-    env['DOTNET_MUXER_TARGET'] = str(repo)
+    env['DOTNET_MUXER_TARGET'] = str(fake)
     env.pop('DOTNET_MUXER_VERBOSE', None)
 
     cases = [('rust-forward', str(rust)), ('dotnet-aot-forward', str(dotnet))]
 
     print('== Forward benchmark (ms) ==')
-    print(f'DOTNET_MUXER_TARGET={repo}')
+    print(f'DOTNET_MUXER_TARGET={fake}')
 
     for name, exe in cases:
         for _ in range(warmup):

@@ -1,7 +1,7 @@
 // dotnet-muxer: Routes dotnet invocations to the right runtime/SDK.
 //
-// Requires DOTNET_MUXER_TARGET env var (repo root path). Uses
-// <root>/.dotnet/dotnet and redirects testhost.dll invocations from
+// Requires DOTNET_MUXER_TARGET env var (dotnet executable path). Uses
+// that dotnet path directly and redirects testhost.dll invocations from
 // the pinned SDK to the repo's locally-built testhost.
 //
 // Build:   cargo build --release
@@ -219,7 +219,7 @@ fn exec_dotnet_verbose(dotnet_path: &Path, args: &[OsString], log: &mut LogEntry
     }
 }
 
-fn require_repo_root_fast() -> PathBuf {
+fn require_target_path_fast() -> PathBuf {
     match env::var_os(DOTNET_MUXER_TARGET) {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => {
@@ -229,7 +229,7 @@ fn require_repo_root_fast() -> PathBuf {
     }
 }
 
-fn require_repo_root_verbose(log: &mut LogEntry) -> PathBuf {
+fn require_target_path_verbose(log: &mut LogEntry) -> PathBuf {
     match env::var_os(DOTNET_MUXER_TARGET) {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => fail(
@@ -240,8 +240,12 @@ fn require_repo_root_verbose(log: &mut LogEntry) -> PathBuf {
     }
 }
 
-fn target_dotnet_path(repo_root: &PathBuf) -> PathBuf {
-    repo_root.join(".dotnet").join(dotnet_exe())
+fn repo_root_from_target(target_path: &Path) -> Option<PathBuf> {
+    let dotnet_dir = target_path.parent()?;
+    if dotnet_dir.file_name()? != std::ffi::OsStr::new(".dotnet") {
+        return None;
+    }
+    Some(dotnet_dir.parent()?.to_path_buf())
 }
 
 fn ensure_target_dotnet_exists(log: &mut LogEntry, target_path: &Path) {
@@ -250,10 +254,7 @@ fn ensure_target_dotnet_exists(log: &mut LogEntry, target_path: &Path) {
     }
 
     let msg = format!("{} not found", target_path.display());
-    let err = format!(
-        "[dotnet-muxer] DOTNET_MUXER_TARGET does not contain {}",
-        target_path.display()
-    );
+    let err = format!("[dotnet-muxer] DOTNET_MUXER_TARGET not found: {}", target_path.display());
     fail(log, &msg, &err);
 }
 
@@ -273,18 +274,19 @@ fn main() {
         let _ = args.next();
         let forwarded_args: Vec<OsString> = args.collect();
 
-        let repo_root = require_repo_root_verbose(&mut log);
-        let target_path = target_dotnet_path(&repo_root);
+        let target_path = require_target_path_verbose(&mut log);
         ensure_target_dotnet_exists(&mut log, &target_path);
 
         if !forwarded_args.is_empty() {
-            let dotnet_dir = repo_root.join(".dotnet");
-            if is_testhost_from_sdk(&forwarded_args, &dotnet_dir) {
-                if let Some(testhost) = find_testhost_dotnet(&repo_root) {
-                    log.msg("testhost redirect");
-                    exec_dotnet_verbose(&testhost, &forwarded_args, &mut log);
+            if let Some(repo_root) = repo_root_from_target(&target_path) {
+                let dotnet_dir = repo_root.join(".dotnet");
+                if is_testhost_from_sdk(&forwarded_args, &dotnet_dir) {
+                    if let Some(testhost) = find_testhost_dotnet(&repo_root) {
+                        log.msg("testhost redirect");
+                        exec_dotnet_verbose(&testhost, &forwarded_args, &mut log);
+                    }
+                    log.msg("testhost not found, falling through");
                 }
-                log.msg("testhost not found, falling through");
             }
         }
 
@@ -295,8 +297,7 @@ fn main() {
     let _ = args.next();
     let first_arg = args.next();
 
-    let repo_root = require_repo_root_fast();
-    let target_path = target_dotnet_path(&repo_root);
+    let target_path = require_target_path_fast();
 
     if first_arg.is_none() {
         exec_dotnet_fast(&target_path, &[]);
@@ -307,10 +308,12 @@ fn main() {
     forwarded_args.extend(args);
 
     if !forwarded_args.is_empty() {
-        let dotnet_dir = repo_root.join(".dotnet");
-        if is_testhost_from_sdk(&forwarded_args, &dotnet_dir) {
-            if let Some(testhost) = find_testhost_dotnet(&repo_root) {
-                exec_dotnet_fast(&testhost, &forwarded_args);
+        if let Some(repo_root) = repo_root_from_target(&target_path) {
+            let dotnet_dir = repo_root.join(".dotnet");
+            if is_testhost_from_sdk(&forwarded_args, &dotnet_dir) {
+                if let Some(testhost) = find_testhost_dotnet(&repo_root) {
+                    exec_dotnet_fast(&testhost, &forwarded_args);
+                }
             }
         }
     }

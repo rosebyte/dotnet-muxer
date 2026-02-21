@@ -128,13 +128,13 @@ with tempfile.TemporaryDirectory(prefix="dotnet-muxer-bench-") as tmp:
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     env = os.environ.copy()
-    env["DOTNET_MUXER_TARGET"] = str(repo)
+    env["DOTNET_MUXER_TARGET"] = str(fake)
     env.pop("DOTNET_MUXER_VERBOSE", None)
 
     cases = [("rust-forward", str(rust)), ("dotnet-aot-forward", str(dotnet))]
 
     print("== Forward benchmark (ms) ==")
-    print(f"DOTNET_MUXER_TARGET={repo}")
+    print(f"DOTNET_MUXER_TARGET={fake}")
 
     for name, exe in cases:
         for _ in range(warmup):
@@ -182,7 +182,7 @@ if declare -f code > /dev/null 2>&1; then
 fi
 code() {
     if [ -n "\$1" ] && [ -d "\$1" ] && [ -f "\$1/.dotnet/dotnet" ]; then
-        export DOTNET_MUXER_TARGET="\$(cd "\$1" && pwd)"
+        export DOTNET_MUXER_TARGET="\$(cd "\$1" && pwd)/.dotnet/dotnet"
         export PATH="\$HOME/.dotnet-muxer:\$PATH"
         export DOTNET_MULTILEVEL_LOOKUP=0
         if ! command -v mono >/dev/null 2>&1; then

@@ -23,12 +23,12 @@ internal static class Program
 
     private static void TryGetTestHostPath(string[] args, ref string testHostPath)
     {
-        if (args.Length < 2)
+        if (args.Length < 1)
         {
             return;
         }
 
-        var argument = args[1];
+        var argument = args[0];
         if (!argument.EndsWith("vstest.console.dll", StringComparison.OrdinalIgnoreCase))
         {
             return; 
@@ -74,7 +74,7 @@ internal static class Program
             UseShellExecute = false
         };
 
-        for (var i = 1; i < args.Length; i++)
+        for (var i = 0; i < args.Length; i++)
         {
             startInfo.ArgumentList.Add(args[i]);
         }
