@@ -11,6 +11,12 @@ path = "src/main.rs"
 [dependencies]
 time = { version = "0.3", features = ["formatting"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+	"Win32_Foundation",
+	"Win32_System_Diagnostics_ToolHelp",
+] }
+
 [profile.release]
 lto = true
 codegen-units = 1

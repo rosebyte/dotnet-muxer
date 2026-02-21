@@ -20,44 +20,48 @@ fn main() {
         }
     };
 
-    if !target_path.is_file() {
-        eprintln!(
-            "[dotnet-muxer] DOTNET_MUXER_TARGET not found: {}",
-            target_path.display()
-        );
-        process::exit(1);
-    }
-
     let target_path = try_get_testhost_path(&args, target_path);
     dispatch::run(&target_path, &args);
 }
 
 fn try_get_testhost_path(args: &[OsString], target_path: PathBuf) -> PathBuf {
-    if args.is_empty() || args.len() < 2 {
+    if args.len() < 2 {
         return target_path;
     }
 
-    let argument = PathBuf::from(&args[1]);
+    let argument = Path::new(&args[1]);
     let is_vstest = argument
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.eq_ignore_ascii_case("vstest.console.dll"))
-        .unwrap_or(false);
+        .is_some_and(|name| name.eq_ignore_ascii_case("vstest.console.dll"));
     if !is_vstest {
         return target_path;
     }
 
-    let Some(repo_root) = repo_root_from_target(&target_path) else {
+    let Some(dotnet_dir) = target_path.parent() else {
         return target_path;
     };
 
-    let sdk_root = repo_root.join(".dotnet").join("sdk");
-    let full_argument = fs::canonicalize(&argument).unwrap_or(argument);
+    if dotnet_dir.file_name() != Some(OsStr::new(".dotnet")) {
+        return target_path;
+    }
+
+    let Some(repo_root) = dotnet_dir.parent() else {
+        return target_path;
+    };
+
+    let mut sdk_root = repo_root.to_path_buf();
+    sdk_root.push(".dotnet");
+    sdk_root.push("sdk");
+    let full_argument = fs::canonicalize(argument).unwrap_or_else(|_| argument.to_path_buf());
     if !full_argument.starts_with(&sdk_root) {
         return target_path;
     }
 
-    let testhost_dir = repo_root.join("artifacts").join("bin").join("testhost");
+    let mut testhost_dir = repo_root.to_path_buf();
+    testhost_dir.push("artifacts");
+    testhost_dir.push("bin");
+    testhost_dir.push("testhost");
     if !testhost_dir.is_dir() {
         return target_path;
     }
@@ -72,14 +76,19 @@ fn try_get_testhost_path(args: &[OsString], target_path: PathBuf) -> PathBuf {
 
     if let Ok(entries) = fs::read_dir(&testhost_dir) {
         for entry in entries.flatten() {
-            let candidate = entry.path().join(dotnet_name);
+            let mut candidate = entry.path();
+            candidate.push(dotnet_name);
             if !candidate.is_file() {
                 continue;
             }
 
             let is_release = candidate
                 .components()
-                .any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("Release"));
+                .any(|c| {
+                    c.as_os_str()
+                        .to_str()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("Release"))
+                });
             selected = candidate;
             if is_release {
                 return selected;
@@ -87,13 +96,5 @@ fn try_get_testhost_path(args: &[OsString], target_path: PathBuf) -> PathBuf {
         }
     }
 
-    selected
-}
-
-fn repo_root_from_target(target_path: &Path) -> Option<PathBuf> {
-    let dotnet_dir = target_path.parent()?;
-    if dotnet_dir.file_name()? != OsStr::new(".dotnet") {
-        return None;
-    }
-    Some(dotnet_dir.parent()?.to_path_buf())
+    return selected;
 }
