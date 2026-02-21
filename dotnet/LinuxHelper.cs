@@ -1,5 +1,6 @@
 namespace DotnetMuxer;
 
+#if !DOTNETMUXER_WINDOWS && !DOTNETMUXER_DARWIN
 internal static class LinuxHelper
 {
     private const string Unknown = "unknown";
@@ -46,3 +47,4 @@ internal static class LinuxHelper
         }
     }
 }
+#endif

@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace DotnetMuxer;
 
+#if !DOTNETMUXER_WINDOWS && !DOTNETMUXER_LINUX
 internal static class DarwinHelper
 {
     private const string Unknown = "unknown";
@@ -81,3 +82,4 @@ internal static class DarwinHelper
         IntPtr buffer,
         uint buffersize);
 }
+#endif

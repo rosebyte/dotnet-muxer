@@ -18,4 +18,17 @@
     <SelfContained>true</SelfContained>
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' and $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win-'))">
+    <DefineConstants>$(DefineConstants);DOTNETMUXER_WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' and $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-'))">
+    <DefineConstants>$(DefineConstants);DOTNETMUXER_LINUX</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' and $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('osx-'))">
+    <DefineConstants>$(DefineConstants);DOTNETMUXER_DARWIN</DefineConstants>
+  </PropertyGroup>
+
 </Project>

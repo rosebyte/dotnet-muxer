@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace DotnetMuxer;
 
+#if !DOTNETMUXER_LINUX && !DOTNETMUXER_DARWIN
 internal static class WindowsHelper
 {
     private const string Unknown = "unknown";
@@ -72,3 +73,4 @@ internal static class WindowsHelper
         int processInformationLength,
         out int returnLength);
 }
+#endif

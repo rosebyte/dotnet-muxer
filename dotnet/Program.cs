@@ -46,7 +46,14 @@ internal static class Program
             return;
         }
 
+#if DOTNETMUXER_WINDOWS
+        var dotnet = "dotnet.exe";
+#elif DOTNETMUXER_LINUX || DOTNETMUXER_DARWIN
+        var dotnet = "dotnet";
+#else
         var dotnet = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+#endif
+
         foreach (var entry in Directory.EnumerateDirectories(testhostDir))
         {
             var candidate = Path.Combine(entry, dotnet);
