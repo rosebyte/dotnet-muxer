@@ -19,13 +19,13 @@ internal sealed class Logger
         Write(sb, "target", testHostPath);
         Write(sb, "cwd", Environment.CurrentDirectory);
         Write(sb, "process", $"({Environment.ProcessId}) {Environment.ProcessPath}");
+        AddParents(sb, Environment.ProcessId);
         Write(sb, "ts", DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
         sb.AppendLine();
 
-
         var processPath = Environment.ProcessPath;
         var dir = processPath is null ? null : Path.GetDirectoryName(processPath);
-        var logPath = Path.Combine(dir, "log.log");
+        var logPath = Path.Combine(string.IsNullOrWhiteSpace(dir) ? "." : dir, "log.log");
         File.AppendAllText(logPath, sb.ToString());
     }
 
@@ -40,41 +40,72 @@ internal sealed class Logger
 
     private static void AddParents(StringBuilder sb, int pid)
     {
+        var visited = new HashSet<int>();
+
         while (pid != 0)
         {
-            var parentName = ParentProcessName(pid);
-            sb.AppendLine("  ");
-            sb.Append("parent=\"");
-            sb.Append(parentName);
-            sb.Append("\" ");
-            pid = ParentProcessId(pid);
+            if (!visited.Add(pid))
+            {
+                break;
+            }
+
+            var (parentName, parentId) = GetParentProcess(pid);
+            Write(sb, "parent", $"({parentId}) {parentName}");
+            pid = parentId;
         }
     }
 
-    private static string ParentProcessName(int pid)
+    private static (string Name, int ParentPid) GetParentProcess(int pid)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            return ParentProcessNameWindows(pid);
+        }
+
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
         {
-            return Unknown;
+            return (Unknown, 0);
         }
 
         var ppidRaw = RunPs($"-o ppid= -p {pid}");
-        if (!int.TryParse(ppidRaw, out var ppid))
+        if (!int.TryParse(ppidRaw, out var ppid) || ppid <= 0 || ppid == pid)
         {
-            return Unknown;
+            return (Unknown, 0);
         }
 
         var parent = RunPs($"-o comm= -p {ppid}");
-        return string.IsNullOrWhiteSpace(parent) ? Unknown : parent;
+        return (string.IsNullOrWhiteSpace(parent) ? Unknown : parent, ppid);
+    }
+
+    private static (string Name, int ParentPid) ParentProcessNameWindows(int pid)
+    {
+        var ppidRaw = RunPowerShell($"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').ParentProcessId");
+        if (!int.TryParse(ppidRaw, out var ppid) || ppid <= 0 || ppid == pid)
+        {
+            return (Unknown, 0);
+        }
+
+        var parentName = RunPowerShell($"(Get-Process -Id {ppid} -ErrorAction SilentlyContinue).ProcessName");
+        return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
     }
 
     private static string RunPs(string args)
+    {
+        return RunCommand("ps", args);
+    }
+
+    private static string RunPowerShell(string command)
+    {
+        return RunCommand("powershell", $"-NoProfile -NonInteractive -Command \"{command}\"");
+    }
+
+    private static string RunCommand(string fileName, string args)
     {
         try
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = "ps",
+                FileName = fileName,
                 Arguments = args,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
