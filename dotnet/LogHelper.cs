@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text;
 
 namespace DotnetMuxer;
@@ -41,6 +39,16 @@ internal sealed class LogHelper
 
     private static void AddParents(StringBuilder sb, int pid)
     {
+        var getParentProcess = WindowsHelper.GetParentProcess;
+        if (OperatingSystem.IsLinux())
+        {
+            getParentProcess = LinuxHelper.GetParentProcess;
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            getParentProcess = DarwinHelper.GetParentProcess;
+        }
+
         var visited = new HashSet<int>();
 
         while (pid != 0)
@@ -50,211 +58,9 @@ internal sealed class LogHelper
                 break;
             }
 
-            var (parentName, parentId) = GetParentProcess(pid);
+            var (parentName, parentId) = getParentProcess(pid);
             Write(sb, "parent", $"({parentId}) {parentName}");
             pid = parentId;
         }
     }
-
-    private static (string Name, int ParentPid) GetParentProcess(int pid)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return ParentProcessNameWindows(pid);
-        }
-
-        if (OperatingSystem.IsLinux())
-        {
-            return ParentProcessNameLinux(pid);
-        }
-
-        if (OperatingSystem.IsMacOS())
-        {
-            return ParentProcessNameMac(pid);
-        }
-
-        return (Unknown, 0);
-    }
-
-    private static (string Name, int ParentPid) ParentProcessNameLinux(int pid)
-    {
-        try
-        {
-            var statusPath = $"/proc/{pid}/status";
-            if (!File.Exists(statusPath))
-            {
-                return (Unknown, 0);
-            }
-
-            var ppid = 0;
-            foreach (var line in File.ReadLines(statusPath))
-            {
-                if (!line.StartsWith("PPid:", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var raw = line.Substring("PPid:".Length).Trim();
-                if (!int.TryParse(raw, out ppid) || ppid <= 0 || ppid == pid)
-                {
-                    return (Unknown, 0);
-                }
-
-                break;
-            }
-
-            if (ppid <= 0)
-            {
-                return (Unknown, 0);
-            }
-
-            var commPath = $"/proc/{ppid}/comm";
-            var parentName = File.Exists(commPath) ? File.ReadAllText(commPath).Trim() : Unknown;
-            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
-        }
-        catch
-        {
-            return (Unknown, 0);
-        }
-    }
-
-    private static (string Name, int ParentPid) ParentProcessNameMac(int pid)
-    {
-        try
-        {
-            var ppid = GetParentPidMac(pid);
-            if (ppid <= 0 || ppid == pid)
-            {
-                return (Unknown, 0);
-            }
-
-            var parentName = GetProcessNameMac(ppid);
-            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
-        }
-        catch
-        {
-            return (Unknown, 0);
-        }
-    }
-
-    private static (string Name, int ParentPid) ParentProcessNameWindows(int pid)
-    {
-        var ppid = GetParentPidWindows(pid);
-        if (ppid <= 0 || ppid == pid)
-        {
-            return (Unknown, 0);
-        }
-
-        try
-        {
-            var parentName = Process.GetProcessById(ppid).ProcessName;
-            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
-        }
-        catch
-        {
-            return (Unknown, ppid);
-        }
-    }
-
-    private static int GetParentPidMac(int pid)
-    {
-        const int ProcPidTBsdInfo = 3;
-        const int BufferSize = 256;
-
-        var buffer = Marshal.AllocHGlobal(BufferSize);
-        try
-        {
-            var result = proc_pidinfo(pid, ProcPidTBsdInfo, 0, buffer, BufferSize);
-            if (result <= 20)
-            {
-                return 0;
-            }
-
-            return Marshal.ReadInt32(buffer, 16);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buffer);
-        }
-    }
-
-    private static int GetParentPidWindows(int pid)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            var handle = process.Handle;
-
-            var status = NtQueryInformationProcess(
-                handle,
-                0,
-                out var processInformation,
-                Marshal.SizeOf<ProcessBasicInformation>(),
-                out _);
-
-            if (status != 0)
-            {
-                return 0;
-            }
-
-            return (int)processInformation.InheritedFromUniqueProcessId;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
-    private static string GetProcessNameMac(int pid)
-    {
-        const int NameSize = 1024;
-        var buffer = Marshal.AllocHGlobal(NameSize);
-        try
-        {
-            var len = proc_name(pid, buffer, (uint)NameSize);
-            if (len <= 0)
-            {
-                return string.Empty;
-            }
-
-            return Marshal.PtrToStringAnsi(buffer) ?? string.Empty;
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buffer);
-        }
-    }
-
-    [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_pidinfo")]
-    private static extern int proc_pidinfo(
-        int pid,
-        int flavor,
-        ulong arg,
-        IntPtr buffer,
-        int buffersize);
-
-    [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_name")]
-    private static extern int proc_name(
-        int pid,
-        IntPtr buffer,
-        uint buffersize);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProcessBasicInformation
-    {
-        public IntPtr Reserved1;
-        public IntPtr PebBaseAddress;
-        public IntPtr Reserved2_0;
-        public IntPtr Reserved2_1;
-        public IntPtr UniqueProcessId;
-        public IntPtr InheritedFromUniqueProcessId;
-    }
-
-    [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-        IntPtr processHandle,
-        int processInformationClass,
-        out ProcessBasicInformation processInformation,
-        int processInformationLength,
-        out int returnLength);
 }
