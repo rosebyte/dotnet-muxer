@@ -16,24 +16,44 @@ function Get-Rid {
     return "linux-x64"
 }
 
+function Get-TargetFramework {
+    $sdkLines = dotnet --list-sdks
+    $majors = @()
+
+    foreach ($line in $sdkLines) {
+        if ($line -match '^\s*(\d+)\.') {
+            $majors += [int]$Matches[1]
+        }
+    }
+
+    if ($majors.Count -eq 0) {
+        throw "Could not determine installed .NET SDK version from 'dotnet --list-sdks'"
+    }
+
+    $latest = ($majors | Measure-Object -Maximum).Maximum
+    return "net$latest.0"
+}
+
 function Build-DotnetMuxer {
     $rid = Get-Rid
-    dotnet publish (Join-Path $Root "src/DotnetMuxer/DotnetMuxer.csproj") -c Release -r $rid
+    $tfm = Get-TargetFramework
+    dotnet publish (Join-Path $Root "src/DotnetMuxer/DotnetMuxer.csproj") -c Release -r $rid -p:BuildTargetFramework=$tfm
     exit $LASTEXITCODE
 }
 
 function Install-DotnetMuxer {
     $rid = Get-Rid
+    $tfm = Get-TargetFramework
     $binaryName = if ($IsWindows) { "DotnetMuxer.exe" } else { "DotnetMuxer" }
     $installedName = if ($IsWindows) { "dotnet.exe" } else { "dotnet" }
 
     Write-Host "Building dotnet-muxer..."
-    dotnet publish (Join-Path $Root "src/DotnetMuxer/DotnetMuxer.csproj") -c Release -r $rid
+    dotnet publish (Join-Path $Root "src/DotnetMuxer/DotnetMuxer.csproj") -c Release -r $rid -p:BuildTargetFramework=$tfm
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     Write-Host "Installing to $MuxerDir..."
     New-Item -ItemType Directory -Force -Path $MuxerDir | Out-Null
-    Copy-Item (Join-Path $Root "src/DotnetMuxer/bin/Release/net10.0/$rid/publish/$binaryName") (Join-Path $MuxerDir $installedName) -Force
+    Copy-Item (Join-Path $Root "src/DotnetMuxer/bin/Release/$tfm/$rid/publish/$binaryName") (Join-Path $MuxerDir $installedName) -Force
 
     $ProfilePath = $PROFILE.CurrentUserAllHosts
     $ProfileDir = Split-Path $ProfilePath -Parent

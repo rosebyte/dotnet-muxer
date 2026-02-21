@@ -53,7 +53,7 @@ You can also use the root runner scripts with a single action argument:
 .\run.ps1 build
 ```
 
-`build` publishes the .NET NativeAOT project for the current platform RID.
+`build` publishes the .NET NativeAOT project for the current platform RID and automatically targets the latest installed `netX.0` SDK framework.
 
 If you pass an invalid action, the runners show usage/help:
 

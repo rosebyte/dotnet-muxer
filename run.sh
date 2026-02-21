@@ -21,24 +21,38 @@ detect_rid() {
     esac
 }
 
+detect_tfm() {
+    local latest_major
+    latest_major="$(dotnet --list-sdks 2>/dev/null | awk -F. '{ if ($1 ~ /^[0-9]+$/) print $1 }' | sort -n | tail -1)"
+
+    if [ -z "$latest_major" ]; then
+        echo "Could not determine installed .NET SDK version from 'dotnet --list-sdks'"
+        exit 1
+    fi
+
+    echo "net${latest_major}.0"
+}
+
 usage() {
     echo "Usage: ./run.sh <install|uninstall|build>"
 }
 
 build() {
-    local rid
+    local rid tfm
     rid="$(detect_rid)"
-    dotnet publish "$ROOT_DIR/src/DotnetMuxer/DotnetMuxer.csproj" -c Release -r "$rid"
+    tfm="$(detect_tfm)"
+    dotnet publish "$ROOT_DIR/src/DotnetMuxer/DotnetMuxer.csproj" -c Release -r "$rid" -p:BuildTargetFramework="$tfm"
 }
 
 install() {
-    local rid binary
+    local rid tfm binary
     rid="$(detect_rid)"
+    tfm="$(detect_tfm)"
 
     echo "Building dotnet-muxer..."
-    dotnet publish "$ROOT_DIR/src/DotnetMuxer/DotnetMuxer.csproj" -c Release -r "$rid"
+    dotnet publish "$ROOT_DIR/src/DotnetMuxer/DotnetMuxer.csproj" -c Release -r "$rid" -p:BuildTargetFramework="$tfm"
 
-    binary="$ROOT_DIR/src/DotnetMuxer/bin/Release/net10.0/$rid/publish/DotnetMuxer"
+    binary="$ROOT_DIR/src/DotnetMuxer/bin/Release/$tfm/$rid/publish/DotnetMuxer"
 
     echo "Installing to $MUXER_DIR..."
     mkdir -p "$MUXER_DIR"
