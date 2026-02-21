@@ -11,8 +11,7 @@ mod macos;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-#[path = "fallback.rs"]
-mod fallback;
+compile_error!("Unsupported target OS. dotnet-muxer currently supports only linux, macos, and windows.");
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::write_parent_fields;
@@ -22,6 +21,3 @@ pub(crate) use macos::write_parent_fields;
 
 #[cfg(windows)]
 pub(crate) use windows::write_parent_fields;
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-pub(crate) use fallback::write_parent_fields;
