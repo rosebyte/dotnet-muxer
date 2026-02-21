@@ -43,6 +43,8 @@ You can also use the root runner scripts with a single action argument:
 ./run.sh install
 ./run.sh uninstall
 ./run.sh build
+./run.sh bench
+./run.sh bench-forward
 ```
 
 ### Windows (PowerShell)
@@ -51,15 +53,20 @@ You can also use the root runner scripts with a single action argument:
 .\run.ps1 install
 .\run.ps1 uninstall
 .\run.ps1 build
+.\run.ps1 bench
+.\run.ps1 bench-forward
 ```
 
 `build` runs `cargo clean` and then `cargo build --release`.
+`bench` builds Rust + .NET AOT, prints binary sizes, and runs a startup benchmark.
+`bench-forward` benchmarks actual forwarding using a temporary repo with `.dotnet/dotnet`.
+Set `BENCH_RUNS` to change iteration count (default: `200`).
 
 If you pass an invalid action, the runners show usage/help:
 
 ```sh
 ./run.sh nope
-# Usage: ./run.sh <install|uninstall|build>
+# Usage: ./run.sh <install|uninstall|build|bench|bench-forward>
 ```
 
 ```powershell

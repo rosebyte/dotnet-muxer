@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("install", "uninstall", "build")]
+    [ValidateSet("install", "uninstall", "build", "bench", "bench-forward")]
     [string]$Action
 )
 
@@ -95,6 +95,141 @@ function Uninstall-DotnetMuxer {
     exit 0
 }
 
+function Bench-DotnetMuxer {
+    $Runs = 200
+    if ($env:BENCH_RUNS) {
+        [void][int]::TryParse($env:BENCH_RUNS, [ref]$Runs)
+    }
+
+    $rid = if ($IsWindows) { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }
+
+    cargo build --release --manifest-path (Join-Path $Root "Cargo.toml")
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    dotnet publish (Join-Path $Root "dotnet/DotnetMuxer.csproj") -c Release -r $rid
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    $python = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" } else { $null }
+    if (-not $python) {
+        Write-Error "python3 (or python) is required for bench"
+        exit 1
+    }
+
+    & $python -c @"
+import subprocess, time, statistics
+from pathlib import Path
+
+root = Path(r'$Root')
+rust = root / 'target/release/dotnet'
+dotnet = root / 'dotnet/bin/Release/net10.0/$rid/publish/DotnetMuxer'
+
+if not rust.exists():
+    raise SystemExit(f'Missing Rust binary: {rust}')
+if not dotnet.exists():
+    raise SystemExit(f'Missing .NET AOT binary: {dotnet}')
+
+print('== Size ==')
+print(f'Rust:      {rust.stat().st_size:,} bytes')
+print(f'.NET AOT:  {dotnet.stat().st_size:,} bytes')
+
+cases = [('rust', str(rust)), ('dotnet-aot', str(dotnet))]
+N = int('$Runs')
+warmup = min(20, max(5, N // 10))
+
+print('\n== Startup benchmark (ms) ==')
+for name, exe in cases:
+    for _ in range(warmup):
+        subprocess.run([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    times = []
+    for _ in range(N):
+        t0 = time.perf_counter()
+        subprocess.run([exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        times.append((time.perf_counter() - t0) * 1000)
+
+    p95 = statistics.quantiles(times, n=20)[18] if len(times) >= 20 else max(times)
+    print(f'{name}: n={N} avg={statistics.mean(times):.3f} p50={statistics.median(times):.3f} p95={p95:.3f} min={min(times):.3f} max={max(times):.3f}')
+"@
+    exit $LASTEXITCODE
+}
+
+function BenchForward-DotnetMuxer {
+    $Runs = 200
+    if ($env:BENCH_RUNS) {
+        [void][int]::TryParse($env:BENCH_RUNS, [ref]$Runs)
+    }
+
+    $rid = if ($IsWindows) { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }
+
+    cargo build --release --manifest-path (Join-Path $Root "Cargo.toml")
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    dotnet publish (Join-Path $Root "dotnet/DotnetMuxer.csproj") -c Release -r $rid
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    $python = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" } else { $null }
+    if (-not $python) {
+        Write-Error "python3 (or python) is required for bench-forward"
+        exit 1
+    }
+
+    & $python -c @"
+import os, stat, subprocess, tempfile, time, statistics
+from pathlib import Path
+
+root = Path(r'$Root')
+rid = '$rid'
+is_windows = os.name == 'nt'
+
+rust = root / ('target/release/dotnet.exe' if is_windows else 'target/release/dotnet')
+dotnet = root / ('dotnet/bin/Release/net10.0/{}/publish/DotnetMuxer.exe'.format(rid) if is_windows else 'dotnet/bin/Release/net10.0/{}/publish/DotnetMuxer'.format(rid))
+
+if not rust.exists():
+    raise SystemExit(f'Missing Rust binary: {rust}')
+if not dotnet.exists():
+    raise SystemExit(f'Missing .NET AOT binary: {dotnet}')
+
+N = int('$Runs')
+warmup = min(20, max(5, N // 10))
+
+with tempfile.TemporaryDirectory(prefix='dotnet-muxer-bench-') as tmp:
+    repo = Path(tmp)
+    dotnet_dir = repo / '.dotnet'
+    dotnet_dir.mkdir(parents=True, exist_ok=True)
+
+    if is_windows:
+        fake = dotnet_dir / 'dotnet.exe'
+        fake.write_bytes(b'MZ')
+    else:
+        fake = dotnet_dir / 'dotnet'
+        fake.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    env = os.environ.copy()
+    env['DOTNET_MUXER_TARGET'] = str(repo)
+    env.pop('DOTNET_MUXER_VERBOSE', None)
+
+    cases = [('rust-forward', str(rust)), ('dotnet-aot-forward', str(dotnet))]
+
+    print('== Forward benchmark (ms) ==')
+    print(f'DOTNET_MUXER_TARGET={repo}')
+
+    for name, exe in cases:
+        for _ in range(warmup):
+            subprocess.run([exe], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        times = []
+        for _ in range(N):
+            t0 = time.perf_counter()
+            subprocess.run([exe], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            times.append((time.perf_counter() - t0) * 1000)
+
+        p95 = statistics.quantiles(times, n=20)[18] if len(times) >= 20 else max(times)
+        print(f'{name}: n={N} avg={statistics.mean(times):.3f} p50={statistics.median(times):.3f} p95={p95:.3f} min={min(times):.3f} max={max(times):.3f}')
+"@
+    exit $LASTEXITCODE
+}
+
 switch ($Action) {
     "install" {
         Install-DotnetMuxer
@@ -104,5 +239,11 @@ switch ($Action) {
     }
     "build" {
         Build-DotnetMuxer
+    }
+    "bench" {
+        Bench-DotnetMuxer
+    }
+    "bench-forward" {
+        BenchForward-DotnetMuxer
     }
 }

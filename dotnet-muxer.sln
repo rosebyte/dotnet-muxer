@@ -1,0 +1,29 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet", "dotnet", "{71E6E750-85FD-B5BC-4321-E01377EC6231}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetMuxer", "dotnet\DotnetMuxer.csproj", "{A04F4C3A-A66E-23A1-F21C-BA7E0B59F825}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A04F4C3A-A66E-23A1-F21C-BA7E0B59F825}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A04F4C3A-A66E-23A1-F21C-BA7E0B59F825}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A04F4C3A-A66E-23A1-F21C-BA7E0B59F825}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A04F4C3A-A66E-23A1-F21C-BA7E0B59F825}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{A04F4C3A-A66E-23A1-F21C-BA7E0B59F825} = {71E6E750-85FD-B5BC-4321-E01377EC6231}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {3004F2EA-BD2B-443F-8461-1E39EB6E793C}
+	EndGlobalSection
+EndGlobal

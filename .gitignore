@@ -3,3 +3,5 @@
 Cargo.lock
 dotnet-muxer-*.*.*.vsix
 /vscode-extension/bin
+/dotnet/bin
+/dotnet/obj
