@@ -102,16 +102,12 @@ function code {
             `$env:DOTNET_MUXER_TARGET = `$muxerTargetExe
             `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
             `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
-            if (-not `$IsWindows -and -not (Get-Command mono -ErrorAction SilentlyContinue)) {
-                `$env:BuildTargetFramework = "net11.0"
-            }
+            `$env:BuildTargetFramework = "net11.0"
         } elseif (Test-Path `$muxerTarget) {
             `$env:DOTNET_MUXER_TARGET = `$muxerTarget
             `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
             `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
-            if (-not `$IsWindows -and -not (Get-Command mono -ErrorAction SilentlyContinue)) {
-                `$env:BuildTargetFramework = "net11.0"
-            }
+            `$env:BuildTargetFramework = "net11.0"
         }
     }
     if (`$__dotnet_muxer_prev_code) {

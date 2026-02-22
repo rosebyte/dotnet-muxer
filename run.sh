@@ -120,9 +120,7 @@ code() {
         export DOTNET_MUXER_TARGET="\$resolved_repo/.dotnet/dotnet"
         export PATH="\$HOME/.dotnet-muxer:\$PATH"
         export DOTNET_MULTILEVEL_LOOKUP=0
-        if ! command -v mono >/dev/null 2>&1; then
-            export BuildTargetFramework=net11.0
-        fi
+        export BuildTargetFramework=net11.0
     fi
     if declare -f __dotnet_muxer_prev_code > /dev/null 2>&1; then
         __dotnet_muxer_prev_code "\$@"
