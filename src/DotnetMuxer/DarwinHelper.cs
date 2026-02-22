@@ -21,7 +21,8 @@ internal static class DarwinHelper
             }
 
             var name = GetProcessName(ppid);
-            if (ppid == 1 && string.Equals(name, "launchd", StringComparison.OrdinalIgnoreCase))
+            var path = GetProcessPath(ppid);
+            if (ppid == 1 && string.Equals(path, "/sbin/launchd", StringComparison.OrdinalIgnoreCase))
             {
                 parentPid = 0;
                 parentName = Unknown;
@@ -31,7 +32,6 @@ internal static class DarwinHelper
 
             parentPid = ppid;
             parentName = string.IsNullOrWhiteSpace(name) ? Unknown : name;
-            var path = GetProcessPath(ppid);
             parentPath = string.IsNullOrWhiteSpace(path) ? Unknown : path;
             return true;
         }

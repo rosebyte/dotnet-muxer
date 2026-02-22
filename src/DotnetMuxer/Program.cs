@@ -14,8 +14,9 @@ internal static class Program
         }
 
         TryGetTestHostPath(args, ref targetPath);
-        var exitCode = DispatchHelper.Execute(targetPath, args);
         LogHelper.Run(targetPath, args);
+
+        var exitCode = DispatchHelper.Execute(targetPath, args);
         return exitCode;
     }
 
