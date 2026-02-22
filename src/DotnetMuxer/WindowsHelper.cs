@@ -8,22 +8,28 @@ internal static class WindowsHelper
 {
     private const string Unknown = "unknown";
 
-    internal static (string Name, int ParentPid) GetParentProcess(int pid)
+    internal static bool TryGetParentProcess(int pid, out int parentPid, out string parentName)
     {
         var ppid = GetParentPid(pid);
         if (ppid <= 0 || ppid == pid)
         {
-            return (Unknown, 0);
+            parentPid = 0;
+            parentName = Unknown;
+            return false;
         }
 
         try
         {
-            var parentName = Process.GetProcessById(ppid).ProcessName;
-            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
+            var name = Process.GetProcessById(ppid).ProcessName;
+            parentPid = ppid;
+            parentName = string.IsNullOrWhiteSpace(name) ? Unknown : name;
+            return true;
         }
         catch
         {
-            return (Unknown, ppid);
+            parentPid = ppid;
+            parentName = Unknown;
+            return true;
         }
     }
 

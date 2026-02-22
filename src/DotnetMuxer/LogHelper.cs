@@ -21,6 +21,7 @@ internal sealed class LogHelper
         AddParents(sb, Environment.ProcessId);
         Write(sb, "ts", DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
         sb.AppendLine();
+        sb.AppendLine();
 
         var processPath = Environment.ProcessPath;
         var dir = processPath is null ? null : Path.GetDirectoryName(processPath);
@@ -30,7 +31,8 @@ internal sealed class LogHelper
 
     private static void Write(StringBuilder sb, string key, string value)
     {
-        sb.AppendLine("  ");
+        sb.AppendLine();
+        sb.Append("  ");
         sb.Append(key);
         sb.Append("=\"");
         sb.Append(value);
@@ -46,16 +48,23 @@ internal sealed class LogHelper
             if (!visited.Add(pid))
             {
                 break;
+            }         
+   
+#if DOTNETMUXER_LINUX
+            if (!LinuxHelper.TryGetParentProcess(pid, out var parentId, out var parentName))
+            {
+                break;
             }
-
-#if DOTNETMUXER_WINDOWS
-        var (parentName, parentId) = WindowsHelper.GetParentProcess(pid);
-#elif DOTNETMUXER_LINUX
-        var (parentName, parentId) = LinuxHelper.GetParentProcess(pid);
 #elif DOTNETMUXER_DARWIN
-        var (parentName, parentId) = DarwinHelper.GetParentProcess(pid);
+            if (!DarwinHelper.TryGetParentProcess(pid, out var parentId, out var parentName))
+            {
+                break;
+            }
 #else
-    var (parentName, parentId) = (Unknown, 0);
+            if (!WindowsHelper.TryGetParentProcess(pid, out var parentId, out var parentName))
+            {
+                break;
+            }
 #endif
             Write(sb, "parent", $"({parentId}) {parentName}");
             pid = parentId;

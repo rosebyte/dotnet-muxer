@@ -7,22 +7,28 @@ internal static class DarwinHelper
 {
     private const string Unknown = "unknown";
 
-    internal static (string Name, int ParentPid) GetParentProcess(int pid)
+    internal static bool TryGetParentProcess(int pid, out int parentPid, out string parentName)
     {
         try
         {
             var ppid = GetParentPid(pid);
             if (ppid <= 0 || ppid == pid)
             {
-                return (Unknown, 0);
+                parentPid = 0;
+                parentName = Unknown;
+                return false;
             }
 
-            var parentName = GetProcessName(ppid);
-            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
+            var name = GetProcessName(ppid);
+            parentPid = ppid;
+            parentName = string.IsNullOrWhiteSpace(name) ? Unknown : name;
+            return true;
         }
         catch
         {
-            return (Unknown, 0);
+            parentPid = 0;
+            parentName = Unknown;
+            return false;
         }
     }
 

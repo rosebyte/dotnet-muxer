@@ -5,14 +5,16 @@ internal static class LinuxHelper
 {
     private const string Unknown = "unknown";
 
-    internal static (string Name, int ParentPid) GetParentProcess(int pid)
+    internal static bool TryGetParentProcess(int pid, out int parentPid, out string parentName)
     {
         try
         {
             var statusPath = $"/proc/{pid}/status";
             if (!File.Exists(statusPath))
             {
-                return (Unknown, 0);
+                parentPid = 0;
+                parentName = Unknown;
+                return false;
             }
 
             var ppid = 0;
@@ -26,7 +28,9 @@ internal static class LinuxHelper
                 var raw = line.Substring("PPid:".Length).Trim();
                 if (!int.TryParse(raw, out ppid) || ppid <= 0 || ppid == pid)
                 {
-                    return (Unknown, 0);
+                    parentPid = 0;
+                    parentName = Unknown;
+                    return false;
                 }
 
                 break;
@@ -34,16 +38,22 @@ internal static class LinuxHelper
 
             if (ppid <= 0)
             {
-                return (Unknown, 0);
+                parentPid = 0;
+                parentName = Unknown;
+                return false;
             }
 
             var commPath = $"/proc/{ppid}/comm";
-            var parentName = File.Exists(commPath) ? File.ReadAllText(commPath).Trim() : Unknown;
-            return (string.IsNullOrWhiteSpace(parentName) ? Unknown : parentName, ppid);
+            var name = File.Exists(commPath) ? File.ReadAllText(commPath).Trim() : Unknown;
+            parentPid = ppid;
+            parentName = string.IsNullOrWhiteSpace(name) ? Unknown : name;
+            return true;
         }
         catch
         {
-            return (Unknown, 0);
+            parentPid = 0;
+            parentName = Unknown;
+            return false;
         }
     }
 }
