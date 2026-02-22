@@ -7,7 +7,7 @@ internal static class DarwinHelper
 {
     private const string Unknown = "unknown";
 
-    internal static bool TryGetParentProcess(int pid, out int parentPid, out string parentName)
+    internal static bool TryGetParentProcess(int pid, out int parentPid, out string parentName, out string parentPath)
     {
         try
         {
@@ -16,6 +16,7 @@ internal static class DarwinHelper
             {
                 parentPid = 0;
                 parentName = Unknown;
+                parentPath = Unknown;
                 return false;
             }
 
@@ -24,17 +25,21 @@ internal static class DarwinHelper
             {
                 parentPid = 0;
                 parentName = Unknown;
+                parentPath = Unknown;
                 return false;
             }
 
             parentPid = ppid;
             parentName = string.IsNullOrWhiteSpace(name) ? Unknown : name;
+            var path = GetProcessPath(ppid);
+            parentPath = string.IsNullOrWhiteSpace(path) ? Unknown : path;
             return true;
         }
         catch
         {
             parentPid = 0;
             parentName = Unknown;
+            parentPath = Unknown;
             return false;
         }
     }
@@ -81,6 +86,26 @@ internal static class DarwinHelper
         }
     }
 
+    private static string GetProcessPath(int pid)
+    {
+        const int PathSize = 4096;
+        var buffer = Marshal.AllocHGlobal(PathSize);
+        try
+        {
+            var len = proc_pidpath(pid, buffer, (uint)PathSize);
+            if (len <= 0)
+            {
+                return string.Empty;
+            }
+
+            return Marshal.PtrToStringAnsi(buffer) ?? string.Empty;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
     [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_pidinfo")]
     private static extern int proc_pidinfo(
         int pid,
@@ -91,6 +116,12 @@ internal static class DarwinHelper
 
     [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_name")]
     private static extern int proc_name(
+        int pid,
+        IntPtr buffer,
+        uint buffersize);
+
+    [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_pidpath")]
+    private static extern int proc_pidpath(
         int pid,
         IntPtr buffer,
         uint buffersize);

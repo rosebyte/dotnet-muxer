@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 namespace DotnetMuxer;
@@ -17,7 +18,9 @@ internal sealed class LogHelper
         var sb = new StringBuilder(Environment.CommandLine.Replace(Environment.NewLine, " "));
         Write(sb, "target", testHostPath);
         Write(sb, "cwd", Environment.CurrentDirectory);
-        Write(sb, "process", $"({Environment.ProcessId}) {Environment.ProcessPath}");
+        var currentProcessName = Process.GetCurrentProcess().ProcessName;
+        var currentProcessPath = Environment.ProcessPath ?? Unknown;
+        Write(sb, "process", FormatProcess(currentProcessName, Environment.ProcessId, currentProcessPath));
         AddParents(sb, Environment.ProcessId);
         Write(sb, "ts", DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
         sb.AppendLine();
@@ -51,23 +54,30 @@ internal sealed class LogHelper
             }         
    
 #if DOTNETMUXER_LINUX
-            if (!LinuxHelper.TryGetParentProcess(pid, out var parentId, out var parentName))
+            if (!LinuxHelper.TryGetParentProcess(pid, out var parentId, out var parentName, out var parentPath))
             {
                 break;
             }
 #elif DOTNETMUXER_DARWIN
-            if (!DarwinHelper.TryGetParentProcess(pid, out var parentId, out var parentName))
+            if (!DarwinHelper.TryGetParentProcess(pid, out var parentId, out var parentName, out var parentPath))
             {
                 break;
             }
 #else
-            if (!WindowsHelper.TryGetParentProcess(pid, out var parentId, out var parentName))
+            if (!WindowsHelper.TryGetParentProcess(pid, out var parentId, out var parentName, out var parentPath))
             {
                 break;
             }
 #endif
-            Write(sb, "parent", $"({parentId}) {parentName}");
+            Write(sb, "parent", FormatProcess(parentName, parentId, parentPath));
             pid = parentId;
         }
+    }
+
+    private static string FormatProcess(string? name, int pid, string? path)
+    {
+        var normalizedName = string.IsNullOrWhiteSpace(name) ? Unknown : name;
+        var normalizedPath = string.IsNullOrWhiteSpace(path) ? Unknown : path;
+        return $"{normalizedName} ({pid}) {normalizedPath}";
     }
 }
