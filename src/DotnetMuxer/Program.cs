@@ -33,8 +33,14 @@ internal static class Program
             return;
         }
 
-        var repoRoot = testHostPath.Substring(0, testHostPath.Length - "/.dotnet/dotnet".Length);
-        var sdkRoot = repoRoot + "/.dotnet/sdk";
+#if DOTNETMUXER_WINDOWS
+        var dotnet = "dotnet.exe";
+#else
+        var dotnet = "dotnet";
+#endif
+
+        var repoRoot = testHostPath.Substring(0, testHostPath.Length - "/.dotnet/".Length - dotnet.Length);
+        var sdkRoot = Path.Combine(repoRoot, ".dotnet", "sdk");
         argument = Path.GetFullPath(argument);
         if (!argument.StartsWith(sdkRoot, StringComparison.OrdinalIgnoreCase))
         {
@@ -46,12 +52,6 @@ internal static class Program
         {
             return;
         }
-
-#if DOTNETMUXER_WINDOWS
-        var dotnet = "dotnet.exe";
-#else
-        var dotnet = "dotnet";
-#endif
 
         foreach (var entry in Directory.EnumerateDirectories(testhostDir))
         {

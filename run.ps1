@@ -100,13 +100,19 @@ function code {
         `$muxerTarget = Join-Path `$repoRoot ".dotnet\dotnet"
         if (Test-Path `$muxerTargetExe) {
             `$env:DOTNET_MUXER_TARGET = `$muxerTargetExe
+            `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
+            `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
+            if (-not (Get-Command mono -ErrorAction SilentlyContinue)) {
+                `$env:BuildTargetFramework = "net11.0"
+            }
         } elseif (Test-Path `$muxerTarget) {
             `$env:DOTNET_MUXER_TARGET = `$muxerTarget
+            `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
+            `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
+            if (-not (Get-Command mono -ErrorAction SilentlyContinue)) {
+                `$env:BuildTargetFramework = "net11.0"
+            }
         }
-    }
-    if (`$env:DOTNET_MUXER_TARGET) {
-        `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
-        `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
     }
     if (`$__dotnet_muxer_prev_code) {
         & `$__dotnet_muxer_prev_code @args
