@@ -13,8 +13,8 @@ internal sealed class LogHelper
         {
             return;
         }
-        
-        var sb = new StringBuilder(string.Join(" ", args));
+
+        var sb = new StringBuilder(Environment.CommandLine.Replace(Environment.NewLine, " "));
         Write(sb, "target", testHostPath);
         Write(sb, "cwd", Environment.CurrentDirectory);
         Write(sb, "process", $"({Environment.ProcessId}) {Environment.ProcessPath}");

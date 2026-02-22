@@ -20,6 +20,13 @@ internal static class DarwinHelper
             }
 
             var name = GetProcessName(ppid);
+            if (ppid == 1 && string.Equals(name, "launchd", StringComparison.OrdinalIgnoreCase))
+            {
+                parentPid = 0;
+                parentName = Unknown;
+                return false;
+            }
+
             parentPid = ppid;
             parentName = string.IsNullOrWhiteSpace(name) ? Unknown : name;
             return true;
