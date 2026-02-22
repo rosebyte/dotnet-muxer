@@ -65,11 +65,46 @@ function Install-DotnetMuxer {
 
 $BeginMarker
 `$__dotnet_muxer_prev_code = if (Test-Path Function:\code) { Get-Item Function:\code } else { `$null }
+function __dotnet_muxer_resolve_repo_dir {
+    param([string]`$InputPath)
+
+    if ([string]::IsNullOrWhiteSpace(`$InputPath) -or `$InputPath.StartsWith("-")) {
+        return `$null
+    }
+
+    if (Test-Path `$InputPath -PathType Container) {
+        return (Resolve-Path `$InputPath).Path
+    }
+
+    `$candidate = Join-Path `$HOME `$InputPath
+    if (Test-Path `$candidate -PathType Container) {
+        return (Resolve-Path `$candidate).Path
+    }
+
+    `$candidate = Join-Path `$HOME (Join-Path "Code" `$InputPath)
+    if (Test-Path `$candidate -PathType Container) {
+        return (Resolve-Path `$candidate).Path
+    }
+
+    `$candidate = Join-Path `$HOME (Join-Path "Code" "dotnet-`$InputPath")
+    if (Test-Path `$candidate -PathType Container) {
+        return (Resolve-Path `$candidate).Path
+    }
+
+    return `$null
+}
 function code {
-    if (`$args.Count -ge 1 -and (Test-Path `$args[0] -PathType Container) -and
-        (Test-Path (Join-Path `$args[0] ".dotnet\dotnet.exe"))) {
-        `$repoRoot = (Resolve-Path `$args[0]).Path
-        `$env:DOTNET_MUXER_TARGET = (Join-Path `$repoRoot ".dotnet\dotnet.exe")
+    `$repoRoot = if (`$args.Count -ge 1) { __dotnet_muxer_resolve_repo_dir `$args[0] } else { `$null }
+    if (`$repoRoot) {
+        `$muxerTargetExe = Join-Path `$repoRoot ".dotnet\dotnet.exe"
+        `$muxerTarget = Join-Path `$repoRoot ".dotnet\dotnet"
+        if (Test-Path `$muxerTargetExe) {
+            `$env:DOTNET_MUXER_TARGET = `$muxerTargetExe
+        } elseif (Test-Path `$muxerTarget) {
+            `$env:DOTNET_MUXER_TARGET = `$muxerTarget
+        }
+    }
+    if (`$env:DOTNET_MUXER_TARGET) {
         `$env:PATH = "`$HOME\.dotnet-muxer;`$env:PATH"
         `$env:DOTNET_MULTILEVEL_LOOKUP = "0"
     }

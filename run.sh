@@ -79,9 +79,45 @@ $BEGIN_MARKER
 if declare -f code > /dev/null 2>&1; then
     eval "\\\$(declare -f code | sed '1s/code/__dotnet_muxer_prev_code/')"
 fi
+__dotnet_muxer_resolve_repo_dir() {
+    local input="\$1"
+    local candidate
+
+    if [ -z "\$input" ] || [[ "\$input" == -* ]]; then
+        return 1
+    fi
+
+    if [ -d "\$input" ]; then
+        cd "\$input" >/dev/null 2>&1 && pwd
+        return 0
+    fi
+
+    candidate="\$HOME/\$input"
+    if [ -d "\$candidate" ]; then
+        cd "\$candidate" >/dev/null 2>&1 && pwd
+        return 0
+    fi
+
+    candidate="\$HOME/Code/\$input"
+    if [ -d "\$candidate" ]; then
+        cd "\$candidate" >/dev/null 2>&1 && pwd
+        return 0
+    fi
+
+    candidate="\$HOME/Code/dotnet-\$input"
+    if [ -d "\$candidate" ]; then
+        cd "\$candidate" >/dev/null 2>&1 && pwd
+        return 0
+    fi
+
+    return 1
+}
 code() {
-    if [ -n "\$1" ] && [ -d "\$1" ] && [ -f "\$1/.dotnet/dotnet" ]; then
-        export DOTNET_MUXER_TARGET="\$(cd "\$1" && pwd)/.dotnet/dotnet"
+    local resolved_repo
+    resolved_repo="\$(__dotnet_muxer_resolve_repo_dir "\$1" 2>/dev/null || true)"
+
+    if [ -n "\$resolved_repo" ] && [ -f "\$resolved_repo/.dotnet/dotnet" ]; then
+        export DOTNET_MUXER_TARGET="\$resolved_repo/.dotnet/dotnet"
         export PATH="\$HOME/.dotnet-muxer:\$PATH"
         export DOTNET_MULTILEVEL_LOOKUP=0
         if ! command -v mono >/dev/null 2>&1; then
