@@ -19,6 +19,37 @@ function Get-ProfilePath {
     return $PROFILE.CurrentUserAllHosts
 }
 
+function Get-CandidateProfilePath {
+    # Every profile file the muxer block could plausibly live in. Cleaning all of
+    # them on install/uninstall prevents a stale copy in one file from running
+    # alongside a fresh copy in another (which caused the self-referential
+    # `code` wrapper to recurse into a call-depth overflow).
+    $candidates = @(
+        (Join-Path $HOME ".profile.ps1")
+        $PROFILE.CurrentUserAllHosts
+        $PROFILE.CurrentUserCurrentHost
+    )
+
+    return $candidates | Where-Object { $_ } | Select-Object -Unique
+}
+
+function Remove-MuxerBlock {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $false
+    }
+
+    $content = Get-Content $Path -Raw
+    if ($null -eq $content -or $content -notmatch "dotnet-muxer") {
+        return $false
+    }
+
+    $content = $content -replace "(?s)\r?\n?$([regex]::Escape($BeginMarker)).*?$([regex]::Escape($EndMarker))", ""
+    Set-Content $Path -Value $content -NoNewline
+    return $true
+}
+
 function Get-Rid {
     if ($IsWindows) { return "win-x64" }
     if ($IsMacOS) { return "osx-arm64" }
@@ -73,7 +104,9 @@ function Install-DotnetMuxer {
     $Block = @"
 
 $BeginMarker
-`$__dotnet_muxer_prev_code = if (Test-Path Function:\code) { Get-Item Function:\code } else { `$null }
+if (-not (Test-Path Variable:Global:__dotnet_muxer_prev_code)) {
+    `$Global:__dotnet_muxer_prev_code = if (Test-Path Function:\code) { Get-Item Function:\code } else { `$null }
+}
 function __dotnet_muxer_resolve_repo_dir {
     param([string]`$InputPath)
 
@@ -119,8 +152,8 @@ function code {
             `$env:BuildTargetFramework = "net11.0"
         }
     }
-    if (`$__dotnet_muxer_prev_code) {
-        & `$__dotnet_muxer_prev_code @args
+    if (`$Global:__dotnet_muxer_prev_code) {
+        & `$Global:__dotnet_muxer_prev_code @args
     } else {
         & (Get-Command code.cmd -CommandType Application | Select-Object -First 1) @args
     }
@@ -163,14 +196,22 @@ $EndMarker
     if (Test-Path $ProfilePath) {
         $content = Get-Content $ProfilePath -Raw
         if ($content -match "dotnet-muxer") {
-            $content = $content -replace "(?s)\r?\n?$([regex]::Escape($BeginMarker)).*?$([regex]::Escape($EndMarker))", ""
-            Set-Content $ProfilePath -Value $content -NoNewline
-            Write-Host "Replaced existing dotnet-muxer block in $ProfilePath"
+            Write-Host "Refreshing dotnet-muxer block in $ProfilePath"
         } else {
             Write-Host "Adding dotnet-muxer block to $ProfilePath"
         }
     } else {
         Write-Host "Creating $ProfilePath"
+    }
+
+    # Strip any existing block from every candidate profile first. A leftover copy
+    # in a different file would run again in the same session and make the `code`
+    # wrapper capture itself, recursing until PowerShell aborts with a call-depth
+    # overflow.
+    foreach ($candidate in Get-CandidateProfilePath) {
+        if ((Remove-MuxerBlock $candidate) -and ($candidate -ne $ProfilePath)) {
+            Write-Host "Removed stale dotnet-muxer block from $candidate"
+        }
     }
 
     Add-Content $ProfilePath -Value $Block
@@ -190,11 +231,10 @@ function Uninstall-DotnetMuxer {
             (Join-Path $MuxerDir "log.log")
         )
 
-    $ProfilePath = Get-ProfilePath
-    if (Test-Path $ProfilePath) {
-        $content = Get-Content $ProfilePath -Raw
-        $content = $content -replace "(?s)\r?\n?$([regex]::Escape($BeginMarker)).*?$([regex]::Escape($EndMarker))", ""
-        Set-Content $ProfilePath -Value $content -NoNewline
+    foreach ($candidate in Get-CandidateProfilePath) {
+        if (Remove-MuxerBlock $candidate) {
+            Write-Host "Removed dotnet-muxer block from $candidate"
+        }
     }
 
     Write-Host "Uninstalled dotnet-muxer from $MuxerDir and removed shell hooks from PowerShell profile"

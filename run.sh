@@ -76,8 +76,11 @@ install() {
     cat >> "$rc" << DOTNET_MUXER_EOF
 
 $BEGIN_MARKER
-if declare -f code > /dev/null 2>&1; then
-    eval "\\\$(declare -f code | sed '1s/code/__dotnet_muxer_prev_code/')"
+if [ -z "\${__dotnet_muxer_prev_code_captured:-}" ]; then
+    __dotnet_muxer_prev_code_captured=1
+    if declare -f code > /dev/null 2>&1; then
+        eval "\\\$(declare -f code | sed '1s/code/__dotnet_muxer_prev_code/')"
+    fi
 fi
 __dotnet_muxer_resolve_repo_dir() {
     local input="\$1"
