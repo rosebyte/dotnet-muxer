@@ -1,110 +1,167 @@
-# dotnet-muxer
+# Muxlet
 
-A .NET NativeAOT dispatcher that routes `dotnet` invocations to the right runtime/SDK based on context. Built primarily to make **VS Code work properly with [Arcade](https://github.com/dotnet/arcade)-based repositories** that ship their own local .NET SDK in `.dotnet/`.
+Muxlet is a small, extensible native front end for .NET commands. Its executable
+is **`dotnet`** (`dotnet.exe` on Windows), but Muxlet itself needs no installed
+.NET SDK or runtime.
 
-## The Problem
-
-Arcade-based .NET repositories (like [dotnet/runtime](https://github.com/dotnet/runtime)) bootstrap a private .NET SDK into a `.dotnet/` directory at the repo root. Command-line builds use wrapper scripts that set up the environment, but VS Code (and extensions like C# Dev Kit) invoke the globally installed `dotnet`, which is the wrong SDK — leading to broken IntelliSense, failed builds, and incorrect test execution.
-
-## How It Works
-
-`dotnet-muxer` installs a small `dotnet` binary into `~/.dotnet-muxer/` and injects a shell wrapper around the `code` command. When you open a repo with `code /path/to/repo`:
-
-**Important:** This flow is activated when VS Code is started from the command line through `code`, for example:
-
-```sh
-code .
-code <path-to-arcade-repo>
+```text
+dotnet dispatcher configuration  -> Muxlet's configuration path
+dotnet foo a b                   -> private dotnet-foo, if installed
+dotnet build                     -> private dotnet-build, if installed
+everything else                  -> a genuine dotnet installation
 ```
 
-That means you should launch VS Code from a terminal in the Arcade repo, or pass the Arcade repo path to `code`.
+Only `dispatcher` is reserved. Private extensions can deliberately override
+native commands; a broken or failing extension never falls back to another
+implementation. Options, application paths and file-based app invocations go
+to genuine `dotnet`, not extension discovery.
 
-1. The wrapper detects if the repo has a `.dotnet/dotnet` (the local SDK).
-2. If so, it sets `DOTNET_MUXER_TARGET` to the local SDK executable path (`<repo>/.dotnet/dotnet`) and prepends `~/.dotnet-muxer` to `PATH`.
-3. Every `dotnet` invocation now hits the muxer first, which routes to the correct binary:
-   - **Configured SDK executable** — the path in `DOTNET_MUXER_TARGET`.
-   - **Testhost redirect** — when the SDK invokes `vstest.console.dll`, the muxer redirects to the repo's locally-built testhost in `artifacts/bin/testhost/`, preferring the `Release` configuration.
-   - **Strict target requirement** — if `DOTNET_MUXER_TARGET` is missing/empty, or the target executable path does not exist, the muxer exits with an error.
+**Muxlet is not an SDK manager.** `dotnet-sdks`, if separately installed, is an
+ordinary optional extension. This repository does not contain SDK tracking,
+release catalogues, SDK installation or pruning. Building and releasing core
+does not require an extensions checkout.
 
-## Installation
+## Build and install
+
+Build with Rust 1.85 or newer (edition 2024), Cargo and the native linker for
+your platform:
 
 ```sh
-git clone https://github.com/rosebyte/dotnet-muxer.git
-cd dotnet-muxer
+cargo build --release --locked --bins
+cargo test --locked
 ./run.sh install
 ```
 
-This publishes the NativeAOT binary, installs it to `~/.dotnet-muxer/`, and adds a `code` wrapper to your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
-
-On Windows (PowerShell):
-
-```powershell
-.\run.ps1 install
-```
-
-## Runner Scripts
-
-You can also use the root runner scripts with a single action argument:
-
-### Unix / macOS
+On Windows, use `.\run.ps1 install`. The runners also support `build` and `test`;
+installation options are forwarded to the standalone `muxlet-install` helper.
+For example:
 
 ```sh
-./run.sh install
-./run.sh uninstall
-./run.sh build
+./run.sh install --home "$HOME/my muxlet"
 ```
 
-### Windows (PowerShell)
+Installation is per user. It does **not** edit PATH, shell profiles, machine
+configuration or SDK roots. Put the application's `bin` directory on your user
+PATH yourself. For a custom home, also set `DOTNET_SDK_HOME` in the environment
+of subsequent invocations so discovery and configuration use that same home.
+This legacy variable names the **Muxlet application home**, not an SDK root.
 
-```powershell
-.\run.ps1 install
-.\run.ps1 uninstall
-.\run.ps1 build
-```
-
-`build` publishes the .NET NativeAOT project for the current platform RID and automatically targets the latest installed `netX.0` SDK framework.
-
-If you pass an invalid action, the runners show usage/help:
-
-```sh
-./run.sh nope
-# Usage: ./run.sh <install|uninstall|build>
-```
-
-```powershell
-.\run.ps1 nope
-# Cannot validate argument on parameter 'Action'...
-```
-
-### Prerequisites
-
-- [.NET SDK](https://dotnet.microsoft.com/download)
-
-## Environment Variables
-
-| Variable | Description |
+| Platform | Default application home |
 |---|---|
-| `DOTNET_MUXER_TARGET` | Full path to the target `dotnet` executable. Set automatically by the `code` wrapper to `<repo>/.dotnet/dotnet` (or `.exe` on Windows). |
-| `DOTNET_MUXER_VERBOSE` | Set to `1` to enable logging to `~/.dotnet-muxer/log.log`. Useful for troubleshooting. |
-| `DOTNET_MULTILEVEL_LOOKUP` | Set to `0` by the wrapper to prevent .NET from searching higher-level shared locations. |
-| `BuildTargetFramework` | Set to `net11.0` outside windows if mono is not installed. |
+| Windows | `%LOCALAPPDATA%\muxlet` (native known-folder discovery) |
+| macOS | `~/Library/Application Support/muxlet` |
+| Linux | `$XDG_DATA_HOME/muxlet`, otherwise `~/.local/share/muxlet` |
 
-## Uninstall
+```text
+<APP_HOME>/
+    bin/dotnet[.exe]
+    configuration.json          created only when configuration is written
+    extensions/                 initially empty, never added to PATH
+    metadata/
+    journal/
+    cache/
+    staging/
+```
+
+Core upgrades replace only the core executable. They preserve configuration,
+the entire extensions directory, extension data and recovery information.
+See [packaging](packaging/README.md) for placement, explicit backups,
+cross-filesystem handling and Windows after-exit updates.
+
+Rust does not imply universal static linking. Native library requirements
+depend on the chosen Rust target; there is no .NET dependency.
+
+## Select a genuine .NET installation
+
+A nonempty `DOTNET_ROOT` must be an **absolute installation directory**. Muxlet
+uses its `dotnet[.exe]`; invalid explicit selection is an error, with no PATH
+fallback.
+
+Without `DOTNET_ROOT` (or when it is empty), Muxlet searches PATH in order.
+It follows executable links and excludes itself, links to itself and recognised
+copies of Muxlet. If there is no genuine executable, forwarding fails explicitly.
+There is no implicit `.dotnet` search, named profile or remembered root.
 
 ```sh
-./run.sh uninstall
+DOTNET_ROOT="/path/to/repository/.dotnet" dotnet build
 ```
 
-```powershell
-.\run.ps1 uninstall
+Children retain the caller's working directory, environment, streams and native
+argument boundaries. The dispatcher does not set PATH or reconcile
+`DOTNET_ROOT_X64`, `DOTNET_ROOT_ARM64` or `DOTNET_ROOT(x86)`. On Unix it replaces
+itself using `exec`; on Windows it launches, waits and returns the child's exit
+result, leaving console controls to the child.
+
+Opaque third-party wrappers may be forwarded to, but are not proof of an SDK
+root. An extension which mutates an installation must request an explicit
+`DOTNET_ROOT` rather than guess or skip an earlier PATH choice. This is not a
+security or universal SDK-isolation boundary: directly launched applications,
+apphosts, `sdk.paths` and native tool discovery retain their own behaviour.
+
+## Configuration path
+
+```sh
+dotnet dispatcher configuration
+dotnet dispatcher --home "/custom application home" configuration
 ```
 
-This removes the binary/log files and the `# >>> dotnet-muxer ... <<< dotnet-muxer` block from your shell profile (`~/.zshrc` / `~/.bashrc`) or PowerShell profile (Windows).
+The output is exactly the absolute configuration filename and a newline.
+Diagnostics use stderr and a nonzero exit status. The query does not read,
+create, repair or migrate configuration; it works with missing, malformed,
+unreadable or future-version configuration and without an SDK.
 
-## License
+Home precedence is a core command's explicit `--home`, then nonempty
+`DOTNET_SDK_HOME`, then the platform default. An extension's `--home` belongs to
+that extension and is not consumed by the router.
 
-This project is provided as-is without a formal license. See the repository for details.
+The common JSON envelope is:
+
+```json
+{
+  "schemaVersion": 1,
+  "extensions": {}
+}
+```
+
+Configuration writers share `<APP_HOME>/metadata/application.lock`, preserve
+unrelated JSON, refuse incompatible edits, retain recoverable originals and
+check content fingerprints before atomic replacement. The path query,
+forwarding and extension discovery do not use this write service.
+
+## Install an extension
+
+Place a trusted executable and its supporting files under
+`<APP_HOME>/extensions`. For `dotnet foo a b`, Muxlet launches
+`extensions/dotnet-foo` (or `dotnet-foo.exe`) with just `a b`. Discovery is not
+recursive and never searches the working directory or general PATH.
+
+Extensions receive the unchanged caller environment plus:
+
+| Variable | Contract |
+|---|---|
+| `MUXLET_CONTRACT_VERSION` | `1` |
+| `MUXLET_HOME` | Absolute application home used for discovery |
+| `MUXLET_DISPATCHER` | Resolved path of the running dispatcher |
+
+Launching an extension does not resolve or start a genuine SDK. Extensions
+resolve roots lazily under the [published contract](DESIGN.md), so they can
+initialise an empty installation. Extensions run as the current user; this is
+not a plug-in sandbox or an in-process ABI.
 
 ## Development
 
-Made using the GPT-5.3-Codex and Claude Opus 4.6 models to explore and compare them. Both models produced acceptable results. However, once we started to prioritise performance, manual interventions were still required, as both showed a reduced signal-to-noise ratio when taken outside their comfortable "anything goes" happy path.
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+```
+
+Integration tests compile small native fixtures; they require neither .NET nor
+an extensions repository. CI covers Linux, macOS and Windows, including
+platform-specific process tests. A platform is not considered validated merely
+because its code compiles on another platform.
+
+This pivot replaces the former NativeAOT VS Code/testhost muxer. Its
+`DOTNET_MUXER_TARGET`, automatic repository selection and generated shell hooks
+are not Muxlet interfaces. Remove any old generated shell-profile block and old
+PATH entry manually; the new installer does not rewrite your profiles.

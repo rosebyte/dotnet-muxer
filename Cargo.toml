@@ -1,0 +1,61 @@
+[package]
+name = "muxlet"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "An extensible native dispatcher for .NET commands"
+repository = "https://github.com/rosebyte/dotnet-muxer"
+publish = false
+default-run = "dotnet"
+include = [
+    ".cargo/config.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "DESIGN.md",
+    "run.sh",
+    "run.ps1",
+    "src/**",
+    "tests/**",
+    "packaging/**",
+]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "dotnet"
+path = "src/main.rs"
+
+[[bin]]
+name = "muxlet-install"
+path = "packaging/install.rs"
+
+[dependencies]
+anyhow = "1.0"
+directories = "6.0"
+fs2 = "0.4"
+same-file = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["arbitrary_precision", "preserve_order", "raw_value"] }
+sha2 = "0.10"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+tempfile = "3.15"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
